@@ -231,6 +231,15 @@ export class VoicePipeline {
     this.state = state;
     Logger.debug('Voice state', { from: previous, to: state });
     void this.eventBus.emit('VOICE_STATE_CHANGED', { from: previous, to: state });
+
+    if (state === 'RECORDING') {
+      void this.eventBus.emit('LISTENING_STARTED');
+    } else if (previous === 'RECORDING') {
+      void this.eventBus.emit('LISTENING_FINISHED', { next: state });
+    }
+    if (state === 'PROCESSING_AUDIO') {
+      void this.eventBus.emit('THINKING_STARTED', { source: 'voice' });
+    }
     this.listeners.forEach((listener) => listener(state, previous));
   }
 

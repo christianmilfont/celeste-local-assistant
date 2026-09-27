@@ -33,8 +33,15 @@ export interface SpeechToTextProvider {
   dispose?(): void;
 }
 
+export interface SpeakHooks {
+  /** Chamado quando o áudio realmente começa (após a inicialização do sintetizador). */
+  onStart?: () => void;
+}
+
 export interface TextToSpeechProvider {
-  speak(text: string): Promise<void>;
+  speak(text: string, hooks?: SpeakHooks): Promise<void>;
+  /** true se o provider chama hooks.onStart; caso contrário o início é assumido imediatamente. */
+  readonly notifiesStart?: boolean;
   isAvailable(): boolean;
   checkAvailability?(): Promise<boolean>;
   /** Interrompe a fala em andamento, se houver. */

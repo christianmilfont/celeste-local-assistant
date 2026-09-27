@@ -104,4 +104,33 @@ export type EventType =
   | 'ERROR'
   | 'STATE_CHANGED'
   | 'VOICE_STATE_CHANGED'
-  | 'ASSISTANT_SPEECH';
+  | 'ASSISTANT_SPEECH'
+  | 'AVATAR_STATE_CHANGED'
+  | 'TTS_STARTED'
+  | 'TTS_FINISHED'
+  | 'LISTENING_STARTED'
+  | 'LISTENING_FINISHED'
+  | 'THINKING_STARTED';
+
+/** Estados visuais do avatar 2D. */
+export type AvatarState = 'IDLE' | 'LISTENING' | 'THINKING' | 'SPEAKING' | 'ERROR';
+
+export interface AvatarStateDetails {
+  /** Texto sendo falado (SPEAKING) — usado para legenda e movimento da boca. */
+  text?: string;
+  /** Motivo da mudança (ex.: 'message' quando chega uma mensagem do WhatsApp). */
+  reason?: string;
+  /** SPEAKING/ERROR: a fala comunica um problema. */
+  alert?: boolean;
+}
+
+export interface AvatarStateChange extends AvatarStateDetails {
+  state: AvatarState;
+  previous: AvatarState;
+}
+
+/** O restante do sistema só conhece o estado; nunca manipula HTML/SVG. */
+export interface AvatarController {
+  setState(state: AvatarState, details?: AvatarStateDetails): void;
+  getState(): AvatarState;
+}

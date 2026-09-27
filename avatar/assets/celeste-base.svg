@@ -1,0 +1,142 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="30 40 340 425" width="680" height="850">
+  <!--
+    Retrato base da Celeste — humanoide sintética de material escuro polido (estilo "Skynet").
+    Carregado como <img>: rasterizado uma única vez; os filtros de pintura não custam nada em execução.
+    Circuitos (assets/traces.svg, circuits*.svg), olhos, boca e luzes animadas ficam em camadas por cima,
+    todas com o mesmo viewBox. Luz: ambiente azul frio + recorte ciano nas bordas + reflexos de servidores.
+  -->
+  <defs>
+    <filter id="b12" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="12"/></filter>
+    <filter id="b7" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="7"/></filter>
+    <filter id="b4" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="4"/></filter>
+    <filter id="b2" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="2"/></filter>
+    <filter id="b1" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="1"/></filter>
+    <filter id="grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="1.1" numOctaves="2" seed="11" result="n"/>
+      <feColorMatrix in="n" type="matrix" values="0 0 0 0 .55  0 0 0 0 .65  0 0 0 0 .75  0 0 0 1.1 -.55"/>
+    </filter>
+
+    <!-- material: polímero preto/grafite polido -->
+    <radialGradient id="shell" cx="40%" cy="30%" r="75%">
+      <stop offset="0" stop-color="#2b3845"/>
+      <stop offset=".35" stop-color="#161e27"/>
+      <stop offset=".7" stop-color="#0a0f14"/>
+      <stop offset="1" stop-color="#030507"/>
+    </radialGradient>
+    <linearGradient id="neckShell" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#05080b"/>
+      <stop offset=".35" stop-color="#1c2631"/>
+      <stop offset=".6" stop-color="#0d131a"/>
+      <stop offset="1" stop-color="#020304"/>
+    </linearGradient>
+    <linearGradient id="shoulder" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#18212b"/>
+      <stop offset="1" stop-color="#020304"/>
+    </linearGradient>
+    <radialGradient id="spec" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#cfe6ff" stop-opacity=".9"/>
+      <stop offset="1" stop-color="#cfe6ff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="cyanSpec" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#5fd8ff" stop-opacity=".9"/>
+      <stop offset="1" stop-color="#5fd8ff" stop-opacity="0"/>
+    </radialGradient>
+
+    <path id="head" d="M200 50 C138 50 102 98 101 160 C100 196 107 222 117 240 C120 262 128 290 144 314 C160 336 182 356 200 358 C218 356 240 336 256 314 C272 290 280 262 283 240 C293 222 300 196 299 160 C298 98 262 50 200 50 Z"/>
+    <clipPath id="headClip"><use href="#head"/></clipPath>
+    <path id="neck" d="M170 318 C174 366 171 408 158 448 L242 448 C229 408 226 366 230 318 Z"/>
+    <clipPath id="neckClip"><use href="#neck"/></clipPath>
+  </defs>
+
+  <!-- ================= OMBROS ================= -->
+  <path fill="url(#shoulder)" d="M0 470 C14 438 66 420 140 416 L166 402 L234 402 L260 416 C334 420 386 438 400 470 Z"/>
+  <path d="M260 416 C334 420 386 438 400 470" fill="none" stroke="#6fdcff" stroke-width="1.4" opacity=".55" filter="url(#b1)"/>
+  <path d="M262 420 C320 424 360 436 386 456" fill="none" stroke="#9fe9ff" stroke-width="7" opacity=".12" filter="url(#b4)"/>
+  <path d="M140 416 C66 420 14 438 0 470" fill="none" stroke="#6fdcff" stroke-width="1" opacity=".3" filter="url(#b1)"/>
+  <ellipse cx="300" cy="438" rx="46" ry="10" fill="url(#spec)" opacity=".18" filter="url(#b4)"/>
+  <ellipse cx="100" cy="440" rx="40" ry="9" fill="url(#spec)" opacity=".1" filter="url(#b4)"/>
+
+  <!-- ================= PESCOÇO ================= -->
+  <use href="#neck" fill="url(#neckShell)"/>
+  <g clip-path="url(#neckClip)">
+    <ellipse cx="200" cy="332" rx="48" ry="22" fill="#000" opacity=".9" filter="url(#b7)"/>
+    <!-- tendões/cabos sob a superfície -->
+    <path d="M180 348 C186 380 192 410 196 448" fill="none" stroke="#3a4b5c" stroke-width="3" opacity=".45" filter="url(#b1)"/>
+    <path d="M220 348 C214 380 208 410 204 448" fill="none" stroke="#3a4b5c" stroke-width="3" opacity=".35" filter="url(#b1)"/>
+    <path d="M176 352 C180 386 180 416 176 448" fill="none" stroke="#6fdcff" stroke-width=".8" opacity=".25"/>
+    <path d="M224 352 C220 386 220 416 224 448" fill="none" stroke="#6fdcff" stroke-width=".8" opacity=".35"/>
+    <ellipse cx="196" cy="392" rx="6" ry="30" fill="url(#spec)" opacity=".18" filter="url(#b4)"/>
+  </g>
+  <path d="M230 322 C226 366 229 408 242 448" fill="none" stroke="#6fdcff" stroke-width="1.6" opacity=".6" filter="url(#b1)"/>
+  <path d="M170 322 C174 366 171 408 158 448" fill="none" stroke="#6fdcff" stroke-width="1" opacity=".3" filter="url(#b1)"/>
+
+  <!-- ================= ORELHAS ================= -->
+  <path fill="#0d1319" d="M114 196 C104 188 94 196 94 212 C94 228 98 244 106 254 C110 259 116 258 119 252 Z"/>
+  <path d="M110 200 C102 196 98 204 99 214 C100 226 104 238 110 246" fill="none" stroke="#000" stroke-width="2.5" opacity=".7"/>
+  <path d="M109 212 C105 218 106 228 111 234" fill="none" stroke="#000" stroke-width="2" opacity=".6"/>
+  <path d="M96 204 C93 216 95 236 104 252" fill="none" stroke="#9fd8ff" stroke-width=".8" opacity=".45" filter="url(#b1)"/>
+  <path fill="#080c10" d="M286 196 C296 188 306 196 306 212 C306 228 302 244 294 254 C290 259 284 258 281 252 Z"/>
+  <path d="M290 200 C298 196 302 204 301 214 C300 226 296 238 290 246" fill="none" stroke="#000" stroke-width="2.5" opacity=".7"/>
+  <path d="M291 212 C295 218 294 228 289 234" fill="none" stroke="#000" stroke-width="2" opacity=".6"/>
+  <path d="M304 204 C307 216 305 236 296 252" fill="none" stroke="#6fdcff" stroke-width="1.2" opacity=".75" filter="url(#b1)"/>
+
+  <!-- ================= CABEÇA ================= -->
+  <use href="#head" fill="url(#shell)"/>
+  <g clip-path="url(#headClip)">
+    <rect x="95" y="45" width="210" height="320" filter="url(#grain)" opacity=".12"/>
+
+    <!-- reflexo largo do crânio (luz fria de cima/esquerda) -->
+    <ellipse cx="160" cy="92" rx="58" ry="32" fill="url(#spec)" opacity=".55" filter="url(#b12)" transform="rotate(-18 160 92)"/>
+    <ellipse cx="150" cy="96" rx="22" ry="12" fill="url(#spec)" opacity=".55" filter="url(#b4)" transform="rotate(-25 150 96)"/>
+    <path d="M126 92 C146 68 180 58 216 60" fill="none" stroke="#e3f1ff" stroke-width="3" opacity=".6" filter="url(#b2)"/>
+    <path d="M138 82 C156 66 184 62 208 63" fill="none" stroke="#ffffff" stroke-width=".7" opacity=".55" filter="url(#b1)"/>
+
+    <!-- reflexos verticais dos racks de servidores (lado direito do crânio) -->
+    <g opacity=".35" filter="url(#b4)">
+      <rect x="258" y="80" width="6" height="90" rx="3" fill="#48c8ff" transform="rotate(12 261 125)"/>
+      <rect x="272" y="100" width="4" height="80" rx="2" fill="#48c8ff" transform="rotate(16 274 140)"/>
+      <rect x="244" y="70" width="3" height="60" rx="1.5" fill="#7fdcff" transform="rotate(8 245 100)"/>
+    </g>
+
+    <!-- testa -->
+    <ellipse cx="190" cy="142" rx="34" ry="14" fill="url(#spec)" opacity=".3" filter="url(#b7)"/>
+    <!-- arcos das sobrancelhas (esculpidos) -->
+    <path d="M134 184 C148 172 170 170 186 178" fill="none" stroke="#b9d6f0" stroke-width="3" opacity=".22" filter="url(#b2)"/>
+    <path d="M214 178 C230 170 252 172 266 184" fill="none" stroke="#9fd8ff" stroke-width="3" opacity=".16" filter="url(#b2)"/>
+    <!-- órbitas profundas -->
+    <ellipse cx="160" cy="206" rx="30" ry="16" fill="#000" opacity=".85" filter="url(#b7)"/>
+    <ellipse cx="240" cy="206" rx="30" ry="16" fill="#000" opacity=".85" filter="url(#b7)"/>
+    <!-- maçãs do rosto -->
+    <ellipse cx="146" cy="244" rx="18" ry="8" fill="url(#spec)" opacity=".42" filter="url(#b4)" transform="rotate(-20 146 244)"/>
+    <path d="M134 240 C142 234 154 232 164 234" fill="none" stroke="#e6f3ff" stroke-width="1.2" opacity=".45" filter="url(#b1)"/>
+    <ellipse cx="256" cy="244" rx="16" ry="7" fill="url(#cyanSpec)" opacity=".38" filter="url(#b4)" transform="rotate(20 256 244)"/>
+    <path d="M128 262 C140 282 156 294 174 300" fill="none" stroke="#000" stroke-width="12" opacity=".6" filter="url(#b7)"/>
+    <path d="M272 262 C260 282 244 294 226 300" fill="none" stroke="#000" stroke-width="12" opacity=".6" filter="url(#b7)"/>
+    <!-- nariz -->
+    <path d="M199 208 C198 230 197 250 197 262" fill="none" stroke="#e6f3ff" stroke-width="2.4" opacity=".55" filter="url(#b1)"/>
+    <path d="M207 206 C210 230 214 248 216 262" fill="none" stroke="#000" stroke-width="6" opacity=".6" filter="url(#b4)"/>
+    <ellipse cx="199" cy="265" rx="7" ry="4.5" fill="url(#spec)" opacity=".55" filter="url(#b2)"/>
+    <path d="M187 267 C192 273 196 274 200 273 C204 274 209 273 213 267" fill="none" stroke="#000" stroke-width="2" opacity=".75" filter="url(#b1)"/>
+    <path d="M186 262 C184 266 185 269 188 270" fill="none" stroke="#8fb7d8" stroke-width=".8" opacity=".3"/>
+    <!-- sombra da boca e filtro labial -->
+    <ellipse cx="200" cy="302" rx="30" ry="12" fill="#000" opacity=".45" filter="url(#b4)"/>
+    <path d="M197 280 L196 290 M203 280 L204 290" stroke="#8fb7d8" stroke-width=".7" opacity=".18"/>
+    <!-- queixo -->
+    <ellipse cx="198" cy="338" rx="16" ry="8" fill="url(#spec)" opacity=".38" filter="url(#b4)"/>
+    <!-- mandíbula -->
+    <path d="M128 280 C138 306 152 326 172 342" fill="none" stroke="#000" stroke-width="10" opacity=".55" filter="url(#b4)"/>
+    <path d="M272 280 C262 306 248 326 228 342" fill="none" stroke="#000" stroke-width="10" opacity=".45" filter="url(#b4)"/>
+    <!-- lado direito levemente mais escuro (profundidade) -->
+    <rect x="235" y="45" width="80" height="320" fill="#000" opacity=".22" filter="url(#b12)"/>
+  </g>
+
+  <!-- ================= LUZES DE RECORTE (silhueta) ================= -->
+  <g fill="none" stroke-linecap="round">
+    <!-- direita: forte, ciano -->
+    <path d="M262 74 C288 98 299 128 299 160 C300 196 293 222 283 240 C280 262 272 290 256 314 C240 336 222 354 204 358" stroke="#5fd8ff" stroke-width="7" opacity=".25" filter="url(#b4)"/>
+    <path d="M262 74 C288 98 299 128 299 160 C300 196 293 222 283 240 C280 262 272 290 256 314 C240 336 222 354 204 358" stroke="#aef1ff" stroke-width="1.5" opacity=".75" filter="url(#b1)"/>
+    <!-- esquerda: fria, suave -->
+    <path d="M150 64 C118 88 101 122 101 160 C100 196 107 222 117 240 C120 262 128 290 144 314" stroke="#6fb8ff" stroke-width="5" opacity=".18" filter="url(#b4)"/>
+    <path d="M150 64 C118 88 101 122 101 160 C100 196 107 222 117 240 C120 262 128 290 144 314" stroke="#bfe3ff" stroke-width="1" opacity=".45" filter="url(#b1)"/>
+  </g>
+</svg>

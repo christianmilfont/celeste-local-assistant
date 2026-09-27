@@ -14,15 +14,32 @@ export class VoiceService {
     private eventBus: EventBus
   ) {}
 
-  /** Emite ASSISTANT_SPEECH (para o terminal exibir) e fala o texto. */
+  /**
+   * Emite ASSISTANT_SPEECH (para o terminal exibir) e fala o texto.
+   * TTS_STARTED/TTS_FINISHED delimitam o áudio (usados pelo avatar para mexer a boca).
+   */
   async speak(text: string): Promise<void> {
     await this.eventBus.emit('ASSISTANT_SPEECH', { text });
+
+    let started = false;
+    const markStarted = () => {
+      if (!started) {
+        started = true;
+        void this.eventBus.emit('TTS_STARTED', { text });
+      }
+    };
+    if (!this.ttsProvider.notifiesStart) {
+      markStarted();
+    }
+
     try {
       Logger.debug('Speaking text', { textLength: text.length });
-      await this.ttsProvider.speak(text);
+      await this.ttsProvider.speak(text, { onStart: markStarted });
     } catch (error) {
       Logger.error('Error speaking text', error);
       throw error;
+    } finally {
+      await this.eventBus.emit('TTS_FINISHED', { text, started });
     }
   }
 

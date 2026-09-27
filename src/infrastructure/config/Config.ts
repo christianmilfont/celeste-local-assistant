@@ -132,6 +132,30 @@ export class Config {
     return envInt('VOICE_SILENCE_THRESHOLD', 400);
   }
 
+  /** Serve a página do avatar 2D (http://AVATAR_HOST:AVATAR_PORT). */
+  static get avatarEnabled(): boolean {
+    return process.env.AVATAR_ENABLED !== 'false';
+  }
+
+  /** 127.0.0.1 = só este computador. Use 0.0.0.0 para abrir o avatar em outro dispositivo da rede. */
+  static get avatarHost(): string {
+    return process.env.AVATAR_HOST || '127.0.0.1';
+  }
+
+  static get avatarPort(): number {
+    return envInt('AVATAR_PORT', 7717);
+  }
+
+  /** app = janela própria (Edge/Chrome --app); browser = navegador padrão; none = não abre. */
+  static get avatarWindow(): 'app' | 'browser' | 'none' {
+    const value = process.env.AVATAR_WINDOW;
+    return value === 'browser' || value === 'none' ? value : 'app';
+  }
+
+  static get avatarFullscreen(): boolean {
+    return process.env.AVATAR_FULLSCREEN === 'true';
+  }
+
   static get aiTemperature(): number {
     return parseFloat(process.env.AI_TEMPERATURE || '0.7');
   }

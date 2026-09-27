@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Celeste</title>
+  <link rel="stylesheet" href="avatar.css">
+</head>
+<!--
+  Avatar 2D da Celeste — humanoide sintética (estética "Skynet"), renderização 2D leve.
+  Camadas (mesmo enquadramento, viewBox "30 40 340 425"):
+    background.svg → celeste-base.svg (material, luz) → traces.svg (trilhas tênues)
+    → circuitos luminosos + nós âmbar (máscaras coloridas por CSS) → fluxo de dados (SVG, CSS)
+    → olhos em fenda (SVG) → boca (SVG) → luzes (HTML) → vinheta → HUD.
+  Estáticas: rasterizadas uma vez. Animadas: só opacity/transform ou traço em passos discretos.
+  Parâmetros: ?bg=transparent  ?hud=0  ?captions=0  ?lite=1  ?demo=1  ?state=SPEAKING
+  Assets de circuitos: python scripts/avatar/generate_circuits.py
+-->
+<body data-state="IDLE" data-eyes="OPEN" data-connected="false">
+  <img class="backdrop" src="../../assets/background.svg" alt="" aria-hidden="true">
+  <main class="stage" aria-label="Celeste">
+    <div class="halo" aria-hidden="true"></div>
+
+    <div class="frame">
+    <div class="head-motion">
+      <img class="layer-base" src="../../assets/celeste-base.svg" alt="Celeste" draggable="false">
+      <img class="layer-base traces" src="../../assets/traces.svg" alt="" aria-hidden="true" draggable="false">
+      <div class="circuits" aria-hidden="true"></div>
+      <div class="circuits-amber" aria-hidden="true"></div>
+      <div class="dataflow" aria-hidden="true"><i style="--k:0"></i><i style="--k:1"></i><i style="--k:2"></i><i style="--k:3"></i><i style="--k:4"></i><i style="--k:5"></i><i style="--k:6"></i><i style="--k:7"></i></div>
+      <div class="eye-glow eye-glow-left" aria-hidden="true"></div>
+      <div class="eye-glow eye-glow-right" aria-hidden="true"></div>
+
+      <!-- Olhos: fendas que emitem luz (camada própria; piscar/olhar repintam só ela). -->
+      <svg class="avatar layer layer-eyes" viewBox="30 40 340 425" aria-hidden="true">
+        <defs>
+          <path id="slit" d="M-21 -2.5 C-12 -7.5 9 -6.5 20 0.5 C9 3.6 -12 3.2 -21 -2.5 Z"/>
+          <clipPath id="slitClip"><use href="#slit"/></clipPath>
+          <radialGradient id="slitFill" cx="50%" cy="45%" r="60%">
+            <stop offset="0" class="iris-core" stop-color="#f2ffff"/>
+            <stop offset=".45" class="iris-mid" stop-color="#8ff3ff"/>
+            <stop offset="1" class="iris-outer" stop-color="#1497c4"/>
+          </radialGradient>
+          <radialGradient id="hot" cx="50%" cy="50%" r="50%">
+            <stop offset="0" stop-color="#ffffff" stop-opacity=".95"/>
+            <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+          </radialGradient>
+          <radialGradient id="bloom" cx="50%" cy="50%" r="50%">
+            <stop offset="0" class="glow-stop" stop-color="#7ff0ff" stop-opacity=".55"/>
+            <stop offset=".35" class="glow-stop" stop-color="#7ff0ff" stop-opacity=".2"/>
+            <stop offset="1" class="glow-stop" stop-color="#7ff0ff" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <!-- "sobrancelhas": realce do arco superciliar (a androide não tem pelos) -->
+        <g class="brows">
+          <path class="brow brow-left" d="M136 186 C150 176 170 175 186 182"/>
+          <path class="brow brow-right" d="M214 182 C230 175 250 176 264 186"/>
+        </g>
+        <g class="eye eye-left" transform="translate(160 206)">
+          <circle class="bloom" r="24" fill="url(#bloom)"/>
+          <g class="eye-inner">
+            <g>
+              <use href="#slit" class="slit-edge"/>
+              <use href="#slit" class="slit" fill="url(#slitFill)"/>
+              <g clip-path="url(#slitClip)">
+                <ellipse class="gaze hotspot" rx="7" ry="3.2" fill="url(#hot)"/>
+                <rect class="scan" x="-1" y="-6" width="2" height="12"/>
+              </g>
+              <path class="lid-edge" d="M-22 -2 C-12 -10 11 -9.5 21 -0.5"/>
+              <path class="lid-light" d="M-20 -6 C-10 -13 10 -13 20 -5"/>
+            </g>
+          </g>
+        </g>
+        <g class="eye eye-right" transform="translate(240 206)">
+          <circle class="bloom" r="24" fill="url(#bloom)"/>
+          <g class="eye-inner">
+            <g transform="scale(-1 1)">
+              <use href="#slit" class="slit-edge"/>
+              <use href="#slit" class="slit" fill="url(#slitFill)"/>
+              <g clip-path="url(#slitClip)">
+                <ellipse class="gaze hotspot" rx="7" ry="3.2" fill="url(#hot)"/>
+                <rect class="scan" x="-1" y="-6" width="2" height="12"/>
+              </g>
+              <path class="lid-edge" d="M-22 -2 C-12 -10 11 -9.5 21 -0.5"/>
+              <path class="lid-light" d="M-20 -6 C-10 -13 10 -13 20 -5"/>
+            </g>
+          </g>
+        </g>
+      </svg>
+
+      <!-- Boca: lábios de material escuro polido (paths gerados pelo avatar.js). -->
+      <svg class="avatar layer layer-mouth" viewBox="30 40 340 425" aria-hidden="true">
+        <defs>
+          <clipPath id="mouthClip"><path class="mouth-inner-clip" d="M0 0"/></clipPath>
+          <linearGradient id="lipUpper" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#1d2833"/>
+            <stop offset="1" stop-color="#0a0f14"/>
+          </linearGradient>
+          <linearGradient id="lipLower" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#0c1116"/>
+            <stop offset=".5" stop-color="#2b3a48"/>
+            <stop offset="1" stop-color="#0e141a"/>
+          </linearGradient>
+          <linearGradient id="lipGloss" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#cfeaff" stop-opacity="0"/>
+            <stop offset=".55" stop-color="#cfeaff" stop-opacity=".55"/>
+            <stop offset="1" stop-color="#cfeaff" stop-opacity="0"/>
+          </linearGradient>
+          <radialGradient id="mouthDepth" cx="50%" cy="45%" r="60%">
+            <stop offset="0" class="mouth-core" stop-color="#0b3342"/>
+            <stop offset="1" stop-color="#010203"/>
+          </radialGradient>
+        </defs>
+        <g class="mouth" transform="translate(200 301) scale(1.05 1)">
+          <path class="mouth-inner" d="M0 0"/>
+          <path class="teeth" clip-path="url(#mouthClip)" d="M-13 -9 L13 -9 L12 -1.5 C4 0 -4 0 -12 -1.5 Z"/>
+          <path class="lip-upper" d="M0 0"/>
+          <path class="lip-lower" d="M0 0"/>
+          <path class="lip-gloss" d="M0 0"/>
+          <path class="lip-line" d="M0 0"/>
+        </g>
+      </svg>
+
+      <div class="rim-light" aria-hidden="true"></div>
+      <div class="voice-light" aria-hidden="true"></div>
+    </div>
+    </div>
+
+    <div class="vignette" aria-hidden="true"></div>
+
+    <header class="hud">
+      <div class="name">CELESTE</div>
+      <div class="status"><span class="dot"></span><span class="label">IDLE</span></div>
+    </header>
+    <div class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+    <p class="caption" aria-live="polite"></p>
+  </main>
+
+  <script src="../../lipsync.js"></script>
+  <script src="avatar.js"></script>
+</body>
+</html>

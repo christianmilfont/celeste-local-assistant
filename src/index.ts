@@ -7,6 +7,8 @@ import { WhisperProvider } from './adapters/stt/WhisperProvider';
 import { PiperTTSProvider } from './adapters/tts/PiperTTSProvider';
 import { createAudioRecorder } from './adapters/audio';
 import { TerminalInterface } from './interfaces/cli/TerminalInterface';
+import { AvatarServer } from './interfaces/avatar/AvatarServer';
+import { openAvatarWindow } from './interfaces/avatar/avatarWindow';
 import { Config } from './infrastructure/config/Config';
 import { Logger } from './infrastructure/logging/Logger';
 
@@ -29,19 +31,44 @@ async function main() {
       audioRecorder
     );
 
-    // Garante que gravador/Whisper/TTS não fiquem órfãos se o processo terminar.
+    // Garante que gravador/Whisper/TTS/janela do avatar não fiquem órfãos se o processo terminar.
     const instance = celeste;
-    process.on('exit', () => instance.dispose());
+    let avatarWindow: ReturnType<typeof openAvatarWindow>;
+    process.on('exit', () => {
+      instance.dispose();
+      avatarWindow?.kill();
+    });
+
+    const avatarUrl = await startAvatar(celeste);
+    if (avatarUrl) {
+      avatarWindow = openAvatarWindow(avatarUrl, {
+        mode: Config.avatarWindow,
+        fullscreen: Config.avatarFullscreen,
+      });
+    }
 
     await celeste.start();
 
     await waitForWhatsApp(() => messagingAdapter.isConnected());
 
-    new TerminalInterface(celeste).start();
+    new TerminalInterface(celeste, avatarUrl).start();
   } catch (error) {
     Logger.error('Failed to start Celeste', error);
     celeste?.dispose();
     process.exit(1);
+  }
+}
+
+/** Inicia o servidor do avatar 2D. Uma falha aqui não impede a Celeste de funcionar. */
+async function startAvatar(celeste: Celeste): Promise<string | undefined> {
+  if (!Config.avatarEnabled) {
+    return undefined;
+  }
+  try {
+    return await new AvatarServer(celeste).start(Config.avatarPort, Config.avatarHost);
+  } catch (error) {
+    Logger.warn('Avatar server could not start', { error: String(error) });
+    return undefined;
   }
 }
 

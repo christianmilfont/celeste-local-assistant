@@ -1,0 +1,213 @@
+/*
+ * Celeste — avatar 2D: cabeça flutuante em nuvem de pontos (holograma / scanner 3D).
+ * Performance:
+ *  - rosto e destaques são imagens estáticas (rasterizadas uma vez);
+ *  - estados mudam só cor/opacity (transições curtas na troca de estado);
+ *  - em IDLE não há nenhuma animação: custo ≈ janela vazia do navegador;
+ *  - a única parte animada é a boca, e só durante a fala (camada SVG pequena).
+ */
+
+:root {
+  --bg: #010306;
+  --accent: #4fcfff;
+  --accent-soft: rgba(79, 207, 255, .22);
+  --text: #bfe3f2;
+  --text-dim: rgba(191, 227, 242, .45);
+
+  /* intensidades por estado (0–1) */
+  --cloud: .8;
+  --eyes: .75;
+  --eye-glow: .45;
+  --halo: .16;
+}
+
+body[data-state="LISTENING"] { --accent: #7fe8ff; --accent-soft: rgba(127, 232, 255, .3); --cloud: .95; --eyes: 1; --eye-glow: .85; --halo: .26; }
+body[data-state="THINKING"]  { --accent: #7f9cff; --accent-soft: rgba(127, 156, 255, .26); --cloud: .85; --eyes: .9; --eye-glow: .6; --halo: .2; }
+body[data-state="SPEAKING"]  { --cloud: .9; --eyes: .95; --eye-glow: .7; --halo: .22; }
+body[data-state="ERROR"],
+body[data-alert="true"]      { --accent: #ff5468; --accent-soft: rgba(255, 84, 104, .26); --cloud: .85; --eyes: .9; --eye-glow: .6; }
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: radial-gradient(ellipse 65% 55% at 50% 42%, #061321 0%, var(--bg) 70%);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  overflow: hidden;
+  user-select: none;
+}
+
+body.transparent { background: transparent; }
+body.transparent .vignette { display: none; }
+
+.stage {
+  position: relative;
+  height: min(100vh, 125vw);
+  aspect-ratio: 4 / 5;
+  margin: 0 auto;
+}
+
+.frame {
+  position: absolute;
+  inset: 0;
+  transform: translateY(4%) scale(.94);
+  transform-origin: 50% 100%;
+}
+
+.halo {
+  position: absolute;
+  left: 50%;
+  top: 43%;
+  width: 80%;
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--accent-soft) 0%, transparent 62%);
+  opacity: var(--halo);
+  transition: opacity .6s ease;
+}
+
+/* Rosto: máscara estática + cor do estado. */
+.cloud,
+.highlights,
+.layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+}
+
+.cloud {
+  background: var(--accent);
+  -webkit-mask: url(assets/face-cloud.svg) center / 100% 100% no-repeat;
+  mask: url(assets/face-cloud.svg) center / 100% 100% no-repeat;
+  opacity: var(--cloud);
+  transition: opacity .6s ease, background-color .6s ease;
+}
+
+.highlights { opacity: .8; }
+body[data-state="ERROR"] .highlights { opacity: .35; }
+
+/* ---- olhos: orbes de luz fixos (sem piscar) -------------------------------- */
+
+.eyes {
+  opacity: var(--eyes);
+  transition: opacity .5s ease;
+  will-change: opacity;
+}
+/* Orbe: bola de luz clara — núcleo branco → tom claro do estado → cor do estado; halo na mesma cor. */
+.orb-core { stop-color: #ffffff; }
+.orb-mid { stop-color: color-mix(in srgb, var(--accent) 45%, #ffffff); }
+.orb-edge { stop-color: var(--accent); }
+.orb-halo { stop-color: var(--accent); }
+.orb-glint { fill: #fff; opacity: .5; }
+
+.eye-glow {
+  position: absolute;
+  top: 38.8%;
+  width: 22%;
+  aspect-ratio: 1;
+  margin: -11% 0 0 -11%;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--accent-soft) 0%, transparent 62%);
+  opacity: var(--eye-glow);
+  transition: opacity .5s ease;
+  pointer-events: none;
+}
+.eye-glow-left { left: 38.2%; }
+.eye-glow-right { left: 61%; }
+
+/* THINKING: oscilação lenta do brilho dos olhos (poucos passos, só opacity). */
+body[data-state="THINKING"] .eyes,
+body[data-state="THINKING"] .eye-glow { animation: ponder 2.4s steps(6) infinite; }
+@keyframes ponder {
+  0%, 100% { opacity: .55; }
+  50% { opacity: 1; }
+}
+
+/* ---- boca: arcos de pontos --------------------------------------------------- */
+
+/* Pontos da boca: cor do estado; os do centro são maiores e mais claros (definido no avatar.js). */
+.mouth-dots circle { fill: var(--accent); }
+.mouth-dots .bright { fill: color-mix(in srgb, var(--accent) 45%, #ffffff); }
+.mouth-glow { stop-color: var(--accent); }
+.mouth-inner { opacity: 0; }
+body[data-mouth="MOUTH_SMALL"] .mouth-inner { opacity: .25; }
+body[data-mouth="MOUTH_MEDIUM"] .mouth-inner { opacity: .35; }
+body[data-mouth="MOUTH_OPEN"] .mouth-inner { opacity: .45; }
+
+/* ---- HUD e legenda --------------------------------------------------------- */
+
+.vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse 70% 62% at 50% 44%, transparent 58%, rgba(0, 0, 0, .7) 100%);
+}
+
+.hud {
+  position: absolute;
+  left: 5%;
+  top: 3.5%;
+  pointer-events: none;
+  font-family: "Cascadia Mono", Consolas, "SFMono-Regular", Menlo, monospace;
+}
+
+.name {
+  font-size: clamp(10px, 1.9vh, 15px);
+  letter-spacing: .5em;
+  color: var(--text);
+  opacity: .75;
+}
+
+.status {
+  margin-top: .6em;
+  font-size: clamp(8px, 1.4vh, 11px);
+  letter-spacing: .28em;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: .7em;
+}
+
+.status .dot {
+  width: 5px;
+  height: 5px;
+  background: var(--accent);
+  transition: background .4s ease;
+}
+
+.caption {
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  bottom: 2%;
+  margin: 0;
+  min-height: 2.8em;
+  text-align: center;
+  font-size: clamp(11px, 2vh, 15px);
+  line-height: 1.45;
+  color: var(--text);
+  opacity: 0;
+  transition: opacity .4s ease;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+body.show-caption .caption { opacity: .8; }
+body.no-hud .hud,
+body.no-captions .caption { display: none; }
+
+/* ---- backend desconectado ---------------------------------------------------- */
+
+body[data-connected="false"] { --accent: #3d5566; --accent-soft: rgba(61, 85, 102, .2); --cloud: .35; --eyes: .15; --eye-glow: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .eyes, .eye-glow { animation: none !important; }
+}

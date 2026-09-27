@@ -17,7 +17,10 @@ export class TerminalInterface {
   private whatsappWatcher?: NodeJS.Timeout;
   private lastWhatsappState = false;
 
-  constructor(private celeste: Celeste) {}
+  constructor(
+    private celeste: Celeste,
+    private avatarUrl?: string
+  ) {}
 
   start(): void {
     this.rl = readline.createInterface({
@@ -221,6 +224,7 @@ export class TerminalInterface {
       `TTS:      ${status.tts ? 'ONLINE' : 'OFFLINE'}`,
       `MIC:      ${status.mic ? 'ONLINE' : 'OFFLINE'}`,
       `State:    ${status.state} / voz: ${status.voice}`,
+      ...(this.avatarUrl ? [`Avatar:   ${this.avatarUrl}`] : []),
       '',
       LINE,
     ];

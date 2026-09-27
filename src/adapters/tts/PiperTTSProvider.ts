@@ -1,4 +1,4 @@
-import { TextToSpeechProvider } from '../../core/types/adapters';
+import { SpeakHooks, TextToSpeechProvider } from '../../core/types/adapters';
 import { Config } from '../../infrastructure/config/Config';
 import { Logger } from '../../infrastructure/logging/Logger';
 import { ChildProcess, spawn } from 'child_process';
@@ -20,6 +20,7 @@ if ($env:CELESTE_TTS_VOICE) { $voice = $voices | Where-Object { $_.Name -eq $env
 if (-not $voice) { $voice = $voices | Where-Object { $_.Culture.Name -eq 'pt-BR' } | Select-Object -First 1 }
 if ($voice) { $synth.SelectVoice($voice.Name) }
 $synth.Rate = [int]$env:CELESTE_TTS_RATE
+[Console]::Out.WriteLine('SPEAKING'); [Console]::Out.Flush()
 $synth.Speak($text)
 $synth.Dispose()
 `;
@@ -40,6 +41,7 @@ export class PiperTTSProvider implements TextToSpeechProvider {
   private tempDir: string;
   private available = true;
   private current: ChildProcess | null = null;
+  readonly notifiesStart = true;
 
   constructor() {
     this.model = Config.piperModel;
@@ -51,7 +53,7 @@ export class PiperTTSProvider implements TextToSpeechProvider {
     }
   }
 
-  async speak(text: string): Promise<void> {
+  async speak(text: string, hooks: SpeakHooks = {}): Promise<void> {
     if (!text.trim()) {
       return;
     }
@@ -59,9 +61,9 @@ export class PiperTTSProvider implements TextToSpeechProvider {
       Logger.debug('Starting TTS', { textLength: text.length });
 
       if (process.platform === 'win32') {
-        await this.speakWindows(text);
+        await this.speakWindows(text, hooks);
       } else {
-        await this.speakPiper(text);
+        await this.speakPiper(text, hooks);
       }
 
       this.available = true;
@@ -81,7 +83,7 @@ export class PiperTTSProvider implements TextToSpeechProvider {
     this.current = null;
   }
 
-  private async speakWindows(text: string): Promise<void> {
+  private async speakWindows(text: string, hooks: SpeakHooks): Promise<void> {
     await this.run(
       'powershell.exe',
       ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodePowerShell(WINDOWS_SPEAK_SCRIPT)],
@@ -89,11 +91,17 @@ export class PiperTTSProvider implements TextToSpeechProvider {
         CELESTE_TTS_TEXT: Buffer.from(text, 'utf8').toString('base64'),
         CELESTE_TTS_VOICE: Config.ttsVoice,
         CELESTE_TTS_RATE: String(Config.ttsRate),
+      },
+      undefined,
+      (line) => {
+        if (line === 'SPEAKING') {
+          hooks.onStart?.();
+        }
       }
     );
   }
 
-  private async speakPiper(text: string): Promise<void> {
+  private async speakPiper(text: string, hooks: SpeakHooks): Promise<void> {
     const outputPath = path.join(this.tempDir, `output_${Date.now()}.wav`);
     const model = this.voicePath || this.model;
 
@@ -102,6 +110,7 @@ export class PiperTTSProvider implements TextToSpeechProvider {
 
       Logger.debug('Audio generated, playing...');
 
+      hooks.onStart?.();
       await this.playAudio(outputPath);
     } finally {
       if (!Config.keepAudioFiles && fs.existsSync(outputPath)) {
@@ -126,15 +135,25 @@ export class PiperTTSProvider implements TextToSpeechProvider {
     command: string,
     args: string[],
     env: Record<string, string> = {},
-    stdin?: string
+    stdin?: string,
+    onLine?: (line: string) => void
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       const child = spawn(command, args, {
         windowsHide: true,
         env: { ...process.env, ...env },
-        stdio: [stdin !== undefined ? 'pipe' : 'ignore', 'ignore', 'pipe'],
+        stdio: [stdin !== undefined ? 'pipe' : 'ignore', onLine ? 'pipe' : 'ignore', 'pipe'],
       });
       this.current = child;
+
+      if (onLine) {
+        child.stdout!.on('data', (data) => {
+          data
+            .toString()
+            .split(/\r?\n/)
+            .forEach((line: string) => line.trim() && onLine(line.trim()));
+        });
+      }
 
       let stderr = '';
       child.stderr!.on('data', (data) => (stderr += data.toString()));

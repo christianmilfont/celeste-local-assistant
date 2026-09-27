@@ -33,6 +33,7 @@ celeste-local-assistant/
 │   │   ├── MessageService.ts     # Mensagens recebidas, não lidas, foco, envio
 │   │   ├── VoiceService.ts       # Saída de voz (TTS) e anúncios
 │   │   ├── ResponseService.ts    # Redação da resposta e confirmação
+│   │   ├── AvatarService.ts      # Máquina de estados visual do avatar
 │   │   └── nlu/                  # Normalização de texto e formatação da fala
 │   │
 │   ├── adapters/                 # Implementações de provedores
@@ -48,8 +49,9 @@ celeste-local-assistant/
 │   │   └── tts/
 │   │       └── PiperTTSProvider.ts    # Windows: System.Speech; Linux/macOS: Piper
 │   │
-│   ├── interfaces/cli/
-│   │   └── TerminalInterface.ts  # Terminal: comandos digitados + push-to-talk
+│   ├── interfaces/
+│   │   ├── cli/TerminalInterface.ts   # Terminal: comandos digitados + push-to-talk
+│   │   └── avatar/                    # Servidor do avatar (HTTP + SSE) e janela
 │   │
 │   ├── infrastructure/           # Infraestrutura
 │   │   ├── config/               # Configuração
@@ -57,6 +59,9 @@ celeste-local-assistant/
 │   │   └── storage/              # Banco de dados
 │   │
 │   └── index.ts                  # Ponto de entrada (composição)
+├── avatar/                       # Frontend do avatar 2D (SVG + CSS + JS, sem build)
+├── scripts/avatar/generate_pointcloud.py # Gera o rosto em nuvem de pontos
+├── scripts/avatar/generate_circuits.py   # Gera os circuitos da variante "skynet"
 ├── scripts/stt/whisper_worker.py # Worker do Whisper
 └── tests/                        # Testes unitários (sem hardware/serviços externos)
 ```
@@ -344,6 +349,92 @@ Mensagens que chegam enquanto você fala são anunciadas ao final da interação
 - `/help` - Mostra ajuda
 - `/stop` - Encerra a Celeste
 
+### Avatar 2D
+
+Ao iniciar, a Celeste abre uma janela com o seu rosto (avatar 2D em SVG). O endereço aparece no
+painel do terminal (`Avatar: http://127.0.0.1:7717/`).
+
+```
+                 CELESTE CORE (EventBus)
+      STT ── LLM ── TTS ── WhatsApp ── erros
+                      │
+                AvatarService  (estado: IDLE | LISTENING | THINKING | SPEAKING | ERROR)
+                      │  AVATAR_STATE_CHANGED
+                AvatarServer   (HTTP + Server-Sent Events, sem dependências)
+                      │
+          janela Edge/Chrome --app  |  kiosk  |  outro dispositivo da rede
+```
+
+| Estado | Quando |
+|---|---|
+| IDLE | em repouso |
+| LISTENING | gravando sua voz / chegou mensagem |
+| THINKING | transcrevendo / processando |
+| SPEAKING | TTS reproduzindo |
+| ERROR | falha comunicada ao usuário; volta a IDLE |
+
+O avatar só **desenha**: toda a lógica fica no backend (`AvatarService`), que traduz os eventos
+`LISTENING_STARTED`, `THINKING_STARTED`, `TTS_STARTED`, `TTS_FINISHED`, `MESSAGE_RECEIVED` e `ERROR`
+em `AVATAR_STATE_CHANGED`. O `TTS_STARTED` é emitido quando o áudio realmente começa (não quando o
+sintetizador é chamado), então a boca começa a se mexer junto com a voz.
+
+**Configuração (`.env`):** `AVATAR_ENABLED`, `AVATAR_PORT` (7717), `AVATAR_HOST` (127.0.0.1; use
+`0.0.0.0` para exibir em outro dispositivo da rede), `AVATAR_WINDOW` (`app` | `browser` | `none`),
+`AVATAR_FULLSCREEN` (`true` = kiosk, para um display dedicado).
+
+**Parâmetros da página:** `?hud=0` (sem nome/estado), `?captions=0` (sem legenda),
+`?bg=transparent` (fundo transparente, ex.: OBS), `?lite=1` (sem efeitos contínuos, para hardware
+fraco), `?demo=1` (percorre todos os estados sem backend), `?state=SPEAKING` (pré-visualização estática).
+
+**Display dedicado (futuro):** qualquer navegador serve, por exemplo num Raspberry Pi:
+`chromium-browser --kiosk "http://<ip-do-pc>:7717/?hud=0"` com `AVATAR_HOST=0.0.0.0`.
+
+**Direção visual:** cabeça flutuante em **nuvem de pontos azuis conectados**, como um escaneamento
+3D / holograma de IA — sem pescoço, ombros ou pele pintada. O volume vem da densidade e do brilho dos
+pontos (mais fortes nas bordas e nos contornos: nariz, órbitas, mandíbula), com a cabeça levemente
+girada para o relevo aparecer. Os olhos são **orbes de luz** — bolas claras na cor do estado, com halo (**não piscam**) — e a
+boca é uma linha de pontos (maiores e mais claros no centro, afinando nos cantos) que, na fala,
+se abre em dois arcos — o de baixo desce como uma mandíbula — com um brilho suave entre eles.
+
+| Estado | Visual |
+|---|---|
+| IDLE | tudo parado: nenhuma animação |
+| LISTENING | pontos e olhos mais intensos (ciano claro) |
+| THINKING | azul-violeta, brilho dos olhos oscilando devagar |
+| SPEAKING | boca de pontos em movimento, legenda |
+| ERROR | vermelho, boca levemente para baixo |
+
+**Como é leve:**
+
+| Camada | Tipo | Custo em execução |
+|---|---|---|
+| `assets/face-cloud.svg` | pontos e ligações (máscara colorida por CSS) | nenhum (rasterizada uma vez; recolorida só na troca de estado) |
+| `assets/face-highlights.svg` | pontos mais brilhantes | nenhum |
+| olhos | orbes SVG (gradiente na cor do estado) | só `opacity` (oscilação em passos apenas em THINKING) |
+| boca | SVG pequeno | redesenha só durante a fala (~12 fps) |
+
+A nuvem é **procedural**: `.venv/Scripts/python scripts/avatar/generate_pointcloud.py` (requer
+`numpy`, já instalado no `.venv`) constrói um modelo 3D da cabeça (elipsoide + relevos de nariz,
+órbitas, sobrancelhas, maçãs, lábios e queixo), amostra pontos na superfície, calcula o brilho pela
+normal, liga cada ponto aos vizinhos, gira a cabeça (`YAW`) e escreve no `index.html` a posição
+projetada dos olhos e da boca. Mude a semente, `YAW`, `SPACING` ou os relevos para outro rosto.
+
+**Performance** (Edge, janela 420×560, processos de renderização + GPU, % de 1 núcleo, neste PC):
+
+| Estado | Renderização | GPU |
+|---|---|---|
+| IDLE | ~0,4–0,9% | 0% |
+| LISTENING | ~0–1,3% | 0% |
+| THINKING | ~1–2,5% | ~1% |
+| SPEAKING | ~0,7–2,4% | ~0,5–1% |
+
+Na mesma medição, uma janela vazia do Edge ficou entre 3,6% e 8,4% (ruído do próprio navegador):
+em repouso o avatar custa o mesmo que uma imagem estática.
+
+**Versão anterior** (humanoide sintética estilo "Skynet", com circuitos e fluxo de dados):
+continua disponível em `http://127.0.0.1:7717/variants/skynet/index.html`
+(assets gerados por `scripts/avatar/generate_circuits.py`).
+
 ### Logs
 
 O terminal mostra apenas avisos e erros (`LOG_CONSOLE_LEVEL=warn`) para não poluir a interface.
@@ -404,6 +495,8 @@ O projeto inclui testes unitários (`tests/`) para:
 - `CommandProcessor` — "status", "Celeste, status", "como está o sistema?" → STATUS; contexto da conversa; confirmação; erros
 - `SpeechInputService` — iniciar/finalizar gravação, áudio vazio/silencioso, transcrição vazia, erros de STT
 - `VoicePipeline` — fluxo completo com Microfone, Whisper, Ollama, TTS e WhatsApp simulados
+- `AvatarService` — IDLE → LISTENING → THINKING → SPEAKING → IDLE, TTS_STARTED/TTS_FINISHED, erros, mensagens
+- `AvatarServer` — página, SSE, proteção de caminho; `lipsync.js` — formas da boca
 
 **Nota:** Os testes usam fakes e não dependem de hardware de áudio, Ollama, Whisper nem de uma conta real do WhatsApp.
 
@@ -459,13 +552,21 @@ Se você implementar provedores alternativos nas fases futuras:
 - ✅ Logging estruturado
 - ✅ SQLite para armazenamento
 
-### Fase 1.5 (Atual) - Interação por voz ✅
+### Fase 1.5 - Interação por voz ✅
 - ✅ Push-to-talk no terminal (ENTER para falar)
 - ✅ Speech-to-Text local com Whisper (faster-whisper)
 - ✅ Command Processor único para CLI e voz
 - ✅ Intenções em linguagem natural (regras + LLM)
 - ✅ Contexto da conversa (responder sem repetir o destinatário)
 - ✅ Respostas faladas e tratamento de erros por voz
+
+### Fase 1.6 (Atual) - Avatar 2D ✅
+- ✅ Cabeça holográfica em nuvem de pontos (procedural), olhos em orbes de luz, boca de pontos animada na fala
+- ✅ Custo em repouso ≈ imagem estática
+- ✅ Estados IDLE / LISTENING / THINKING / SPEAKING / ERROR
+- ✅ Boca sincronizada com o início/fim real do TTS
+- ✅ Janela própria ou tela cheia (kiosk), pronta para display dedicado
+- ✅ Baixo consumo (~5% de um núcleo)
 
 ### Fase 2 - Wake Word e Escuta Contínua
 - Wake word "Celeste"

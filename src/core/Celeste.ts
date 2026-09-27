@@ -11,6 +11,7 @@ import {
   StatusSnapshot,
 } from '../application/CommandProcessor';
 import { SpeechInputService } from '../application/SpeechInputService';
+import { AvatarService } from '../application/AvatarService';
 import { VoicePipeline, VoiceTurnResult } from '../application/VoicePipeline';
 import { describeMessage } from '../application/nlu/messageFormat';
 import {
@@ -24,6 +25,7 @@ import { CelesteDatabase } from '../infrastructure/storage/Database';
 import { Logger } from '../infrastructure/logging/Logger';
 import {
   AssistantEvent,
+  AvatarState,
   CommandResult,
   EventType,
   IncomingMessage,
@@ -46,6 +48,7 @@ export class Celeste {
   private speechInputService?: SpeechInputService;
   private voicePipeline?: VoicePipeline;
   private database: CelesteDatabase;
+  private avatarService: AvatarService;
 
   /** Serializa comandos e anúncios para que não disputem o estado nem o alto-falante. */
   private queue: Promise<unknown> = Promise.resolve();
@@ -71,6 +74,7 @@ export class Celeste {
     );
 
     this.voiceService = new VoiceService(ttsProvider, this.eventBus);
+    this.avatarService = new AvatarService(this.eventBus);
 
     const confirmationService = new ConfirmationService();
 
@@ -145,6 +149,7 @@ export class Celeste {
 
   /** Finaliza processos filhos (microfone, Whisper, TTS). Seguro para chamar no 'exit'. */
   dispose(): void {
+    this.avatarService.dispose();
     this.voiceService.stopSpeaking();
     this.audioRecorder?.dispose?.();
     this.sttProvider.dispose?.();
@@ -165,6 +170,7 @@ export class Celeste {
   /** Processa o comando e fala a resposta. */
   async respond(input: string, source: InputSource = 'cli'): Promise<CommandResult> {
     return this.exclusive(async () => {
+      await this.eventBus.emit('THINKING_STARTED', { source });
       const result = await this.commandProcessor.processCommand(input, source);
       await this.speak(result.reply);
       return result;
@@ -240,6 +246,10 @@ export class Celeste {
   }
 
   // ---- Estado -------------------------------------------------------------
+
+  getAvatarState(): AvatarState {
+    return this.avatarService.getState();
+  }
 
   on(eventType: EventType, callback: (event: AssistantEvent) => void | Promise<void>): void {
     this.eventBus.on(eventType, callback);

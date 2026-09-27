@@ -1,0 +1,411 @@
+/*
+ * Celeste — avatar 2D: humanoide sintética de material escuro, estética "Skynet".
+ * Performance:
+ *  - retrato, fundo e circuitos são imagens estáticas (rasterizadas uma vez pelo navegador);
+ *  - toda animação contínua é só opacity/transform, em passos discretos (poucas atualizações/s);
+ *  - olhos e boca ficam em camadas SVG próprias: piscar/falar repinta só a camada pequena;
+ *  - sem filtros CSS, blur, sombras ou partículas em tempo de execução; IDLE quase parado.
+ */
+
+:root {
+  --bg: #010203;
+  --accent: #56d8ff;
+  --accent-soft: rgba(86, 216, 255, .30);
+  --iris-core: #eaffff;
+  --iris-mid: #7ff0ff;
+  --iris-outer: #139cc4;
+  --iris-edge: #062a38;
+  --text: #bfe3f2;
+  --text-dim: rgba(191, 227, 242, .45);
+
+  /* intensidades por estado (0–1), aplicadas via opacity */
+  --circuits: .34;
+  --eye-glow: .6;
+  --rim: .45;
+  --halo: .18;
+  --flow: 0;
+  --amber: .55;
+}
+
+body[data-state="LISTENING"] {
+  --accent: #7feaff; --accent-soft: rgba(127, 234, 255, .38);
+  --iris-mid: #9ff6ff; --iris-outer: #22b6dc;
+  --circuits: .62; --eye-glow: 1; --rim: .75; --halo: .3; --flow: .75;
+}
+body[data-state="THINKING"] {
+  --accent: #8aa8ff; --accent-soft: rgba(138, 168, 255, .32);
+  --iris-mid: #a9c2ff; --iris-outer: #3d63c9; --iris-edge: #0b1a45;
+  --circuits: .55; --eye-glow: .8; --rim: .55; --halo: .24; --flow: 1;
+}
+body[data-state="SPEAKING"] {
+  --circuits: .5; --eye-glow: .9; --rim: .6; --halo: .26; --flow: .7;
+}
+body[data-state="ERROR"],
+body[data-alert="true"] {
+  --accent: #ff5a6a; --accent-soft: rgba(255, 90, 106, .32);
+  --iris-core: #ffe9ec; --iris-mid: #ff8f9b; --iris-outer: #c72f45; --iris-edge: #3a0710;
+  --circuits: .6; --eye-glow: .8; --rim: .55; --flow: .5;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  overflow: hidden;
+  user-select: none;
+}
+
+body.transparent { --bg: transparent; }
+body.transparent .backdrop,
+body.transparent .vignette { display: none; }
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+}
+
+.stage {
+  position: relative;
+  height: min(100vh, 125vw);
+  aspect-ratio: 4 / 5;
+  margin: 0 auto;
+}
+
+/* ---- camadas do rosto ---------------------------------------------------- */
+
+/* Enquadramento: afasta o topo do crânio da borda (transform estático). */
+.frame {
+  position: absolute;
+  inset: 0;
+  transform: translateY(5%) scale(.92);
+  transform-origin: 50% 100%;
+}
+
+.head-motion {
+  position: absolute;
+  inset: 0;
+  transform-origin: 50% 75%;
+  transition: transform 2.2s cubic-bezier(.45, .05, .35, 1);
+}
+
+.layer-base,
+.avatar,
+.circuits,
+.rim-light {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.layer {
+  pointer-events: none;
+  will-change: transform;
+}
+
+/* Circuitos: máscara estática + cor do estado. Só a opacity varia. */
+.circuits {
+  background: var(--accent);
+  -webkit-mask: url(../../assets/circuits.svg) center / 100% 100% no-repeat;
+  mask: url(../../assets/circuits.svg) center / 100% 100% no-repeat;
+  opacity: var(--circuits);
+  transition: opacity .8s ease;
+  will-change: opacity;
+}
+
+/* Nós âmbar (como na referência): cintilam em poucos passos. */
+.circuits-amber {
+  position: absolute;
+  inset: 0;
+  background: #ffae4a;
+  -webkit-mask: url(../../assets/circuits-amber.svg) center / 100% 100% no-repeat;
+  mask: url(../../assets/circuits-amber.svg) center / 100% 100% no-repeat;
+  opacity: var(--amber);
+  animation: twinkle 6s steps(6) infinite;
+  pointer-events: none;
+}
+body[data-state="ERROR"] .circuits-amber { background: #ff6a3d; }
+
+@keyframes twinkle {
+  0%, 100% { opacity: .35; }
+  35% { opacity: .7; }
+  60% { opacity: .45; }
+}
+
+/* Fluxo de dados: 8 quadros pré-renderizados (sprites); só a opacity de cada quadro muda. */
+.dataflow {
+  position: absolute;
+  inset: 0;
+  opacity: var(--flow);
+  transition: opacity .6s ease;
+  pointer-events: none;
+}
+.dataflow i {
+  position: absolute;
+  inset: 0;
+  background: var(--accent);
+  -webkit-mask: center / 100% 100% no-repeat;
+  mask: center / 100% 100% no-repeat;
+  opacity: 0;
+}
+.dataflow i:nth-child(1) { -webkit-mask-image: url(../../assets/dataflow-0.svg); mask-image: url(../../assets/dataflow-0.svg); }
+.dataflow i:nth-child(2) { -webkit-mask-image: url(../../assets/dataflow-1.svg); mask-image: url(../../assets/dataflow-1.svg); }
+.dataflow i:nth-child(3) { -webkit-mask-image: url(../../assets/dataflow-2.svg); mask-image: url(../../assets/dataflow-2.svg); }
+.dataflow i:nth-child(4) { -webkit-mask-image: url(../../assets/dataflow-3.svg); mask-image: url(../../assets/dataflow-3.svg); }
+.dataflow i:nth-child(5) { -webkit-mask-image: url(../../assets/dataflow-4.svg); mask-image: url(../../assets/dataflow-4.svg); }
+.dataflow i:nth-child(6) { -webkit-mask-image: url(../../assets/dataflow-5.svg); mask-image: url(../../assets/dataflow-5.svg); }
+.dataflow i:nth-child(7) { -webkit-mask-image: url(../../assets/dataflow-6.svg); mask-image: url(../../assets/dataflow-6.svg); }
+.dataflow i:nth-child(8) { -webkit-mask-image: url(../../assets/dataflow-7.svg); mask-image: url(../../assets/dataflow-7.svg); }
+
+/* cada quadro fica visível 1/8 do ciclo, em sequência */
+body:not([data-state="IDLE"]) .dataflow i {
+  animation: flow-frame var(--flow-cycle, 2.4s) step-end infinite;
+  animation-delay: calc(var(--k) * var(--flow-cycle, 2.4s) / 8 - var(--flow-cycle, 2.4s));
+}
+body[data-state="THINKING"] { --flow-cycle: 1.4s; }
+body[data-state="IDLE"] .dataflow,
+body[data-connected="false"] .dataflow { display: none; }
+
+@keyframes flow-frame {
+  0% { opacity: 1; }
+  12.5%, 100% { opacity: 0; }
+}
+
+/* IDLE: "respiração" dos circuitos muito lenta, em passos (≈1 atualização/s). */
+body[data-state="IDLE"] .circuits { animation: breathe 7s steps(6) infinite; }
+body[data-state="THINKING"] .circuits { animation: process 1.1s steps(5) infinite; }
+
+@keyframes breathe {
+  0%, 100% { opacity: .26; }
+  50% { opacity: .38; }
+}
+
+@keyframes process {
+  0% { opacity: .35; }
+  30% { opacity: .75; }
+  55% { opacity: .45; }
+  80% { opacity: .85; }
+  100% { opacity: .35; }
+}
+
+/* brilho emitido pelos olhos (HTML, compositado) */
+.eye-glow {
+  position: absolute;
+  top: 39%;
+  width: 26%;
+  aspect-ratio: 1;
+  margin: -13% 0 0 -13%;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--accent-soft) 0%, transparent 65%);
+  opacity: var(--eye-glow);
+  transition: opacity .5s ease;
+  pointer-events: none;
+}
+.eye-glow-left { left: 38.2%; }
+.eye-glow-right { left: 61.8%; }
+body.blink .eye-glow,
+body[data-eyes="CLOSED"] .eye-glow { opacity: .08; transition: opacity 60ms linear; }
+
+/* luz de recorte do lado direito (varia por estado) */
+.rim-light {
+  background: radial-gradient(ellipse 30% 45% at 86% 46%, var(--accent-soft), transparent 70%);
+  opacity: var(--rim);
+  transition: opacity .8s ease;
+  pointer-events: none;
+}
+
+/* luz da voz na garganta: acompanha a boca sem animação própria */
+.voice-light {
+  position: absolute;
+  left: 50%;
+  top: 82.8%;
+  width: 22%;
+  height: 3%;
+  margin-left: -11%;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, var(--accent) 0%, transparent 70%);
+  opacity: 0;
+  pointer-events: none;
+}
+body[data-state="SPEAKING"] .voice-light { opacity: .12; }
+body[data-state="SPEAKING"][data-mouth="MOUTH_SMALL"] .voice-light { opacity: .28; }
+body[data-state="SPEAKING"][data-mouth="MOUTH_MEDIUM"] .voice-light { opacity: .45; }
+body[data-state="SPEAKING"][data-mouth="MOUTH_OPEN"] .voice-light { opacity: .6; }
+
+.halo {
+  position: absolute;
+  left: 50%;
+  top: 40%;
+  width: 90%;
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--accent-soft) 0%, transparent 62%);
+  opacity: var(--halo);
+  transition: opacity .8s ease;
+}
+body[data-state="LISTENING"] .halo { animation: attend 1.8s steps(6) infinite; }
+
+@keyframes attend {
+  0%, 100% { opacity: .22; }
+  50% { opacity: .42; }
+}
+
+.vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse 70% 62% at 50% 44%, transparent 55%, rgba(0, 0, 0, .78) 100%);
+}
+
+/* ---- olhos: fendas que emitem luz ---------------------------------------- */
+
+.iris-core { stop-color: var(--iris-core); }
+.iris-mid { stop-color: var(--iris-mid); }
+.iris-outer { stop-color: var(--iris-outer); }
+.glow-stop { stop-color: var(--iris-mid); }
+.slit-edge { fill: none; stroke: #000; stroke-width: 2.4; opacity: .9; }
+.hotspot { opacity: .85; }
+.scan { fill: #fff; opacity: 0; transition: transform 120ms linear; }
+body[data-state="THINKING"] .scan { opacity: .75; }
+body[data-scan="0"] .scan { transform: translateX(-12px); }
+body[data-scan="1"] .scan { transform: translateX(-4px); }
+body[data-scan="2"] .scan { transform: translateX(4px); }
+body[data-scan="3"] .scan { transform: translateX(12px); }
+.bloom { opacity: var(--eye-glow); transition: opacity .5s ease; }
+.lid-edge { fill: none; stroke: #000; stroke-width: 1.6; stroke-linecap: round; opacity: .9; }
+.lid-light { fill: none; stroke: #8fd8ff; stroke-width: .7; stroke-linecap: round; opacity: .25; }
+.brow { fill: none; stroke: #9fd8ff; stroke-width: 1.2; stroke-linecap: round; opacity: .18; }
+body.blink .bloom,
+body[data-eyes="CLOSED"] .bloom { opacity: .05; }
+
+.eye-inner {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 80ms ease-out;
+}
+.gaze { transition: transform 240ms ease-out; }
+
+body[data-eyes="LISTENING"] .eye-inner { transform: scaleY(1.12); }
+body[data-eyes="THINKING"] .eye-inner { transform: scaleY(.82); }
+body[data-eyes="CLOSED"] .eye-inner,
+body.blink .eye-inner { transform: scaleY(.06); }
+
+.brows { transition: transform 300ms ease; transform-box: fill-box; transform-origin: center; }
+.brow { transition: transform 300ms ease; transform-box: fill-box; }
+body[data-state="LISTENING"] .brows { transform: translateY(-2px); }
+body[data-state="THINKING"] .brow-left { transform: translateY(-1.5px); }
+body[data-state="ERROR"] .brow-left { transform: rotate(3deg); transform-origin: right; }
+body[data-state="ERROR"] .brow-right { transform: rotate(-3deg); transform-origin: left; }
+
+/* ---- boca ---------------------------------------------------------------- */
+
+.lip-upper { fill: url(#lipUpper); }
+.lip-lower { fill: url(#lipLower); }
+.lip-gloss { fill: url(#lipGloss); }
+.lip-line { fill: none; stroke: #000; stroke-width: .9; stroke-linecap: round; opacity: .9; }
+.mouth-core { stop-color: var(--iris-outer); stop-opacity: .45; }
+.mouth-inner { fill: url(#mouthDepth); }
+.teeth { fill: #5f7082; opacity: 0; }
+body[data-mouth="MOUTH_MEDIUM"] .teeth { opacity: .45; }
+body[data-mouth="MOUTH_OPEN"] .teeth { opacity: .6; }
+
+/* ---- HUD e legenda --------------------------------------------------------- */
+
+.hud {
+  position: absolute;
+  left: 5%;
+  top: 3.5%;
+  pointer-events: none;
+  font-family: "Cascadia Mono", Consolas, "SFMono-Regular", Menlo, monospace;
+}
+
+.name {
+  font-size: clamp(10px, 1.9vh, 15px);
+  letter-spacing: .5em;
+  color: var(--text);
+  opacity: .75;
+}
+
+.status {
+  margin-top: .6em;
+  font-size: clamp(8px, 1.4vh, 11px);
+  letter-spacing: .28em;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: .7em;
+}
+
+.status .dot {
+  width: 5px;
+  height: 5px;
+  background: var(--accent);
+  transition: background .4s ease;
+}
+
+.thinking-dots {
+  position: absolute;
+  left: 5%;
+  top: 10%;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+}
+.thinking-dots i { width: 14px; height: 2px; background: var(--accent); opacity: .2; }
+body[data-state="THINKING"] .thinking-dots { opacity: 1; }
+body[data-state="THINKING"] .thinking-dots i { animation: seg 1.2s steps(3) infinite; }
+body[data-state="THINKING"] .thinking-dots i:nth-child(2) { animation-delay: .4s; }
+body[data-state="THINKING"] .thinking-dots i:nth-child(3) { animation-delay: .8s; }
+@keyframes seg { 0%, 100% { opacity: .2; } 33% { opacity: 1; } }
+
+.caption {
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  bottom: 2%;
+  margin: 0;
+  min-height: 2.8em;
+  text-align: center;
+  font-size: clamp(11px, 2vh, 15px);
+  line-height: 1.45;
+  letter-spacing: .02em;
+  color: var(--text);
+  opacity: 0;
+  transition: opacity .4s ease;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+body.show-caption .caption { opacity: .8; }
+body.no-hud .hud,
+body.no-hud .thinking-dots,
+body.no-captions .caption { display: none; }
+
+/* ?lite=1 — hardware fraco: sem nenhuma animação contínua. */
+body.lite .circuits,
+body.lite .circuits-amber,
+body.lite .halo,
+body.lite .thinking-dots i { animation: none !important; }
+body.lite .dataflow { display: none; }
+
+/* ---- backend desconectado ---------------------------------------------------- */
+
+body[data-connected="false"] .stage { opacity: .4; }
+body[data-connected="false"] { --accent: #4b5c6b; --accent-soft: rgba(75, 92, 107, .25); --circuits: .12; --eye-glow: .1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .circuits, .circuits-amber, .halo, .thinking-dots i, .dataflow i { animation: none !important; }
+  .head-motion { transition: none; }
+}
