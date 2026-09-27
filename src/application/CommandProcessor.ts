@@ -6,6 +6,7 @@ import {
   InputSource,
   IntentType,
   MessageIntent,
+  TvCommand,
 } from '../core/types';
 import { EventBus } from '../core/EventBus';
 import { StateMachine } from '../core/StateMachine';
@@ -16,7 +17,8 @@ import { ResponseService } from './ResponseService';
 import { IntentClassifier } from './IntentClassifier';
 import { ConfirmationService } from './ConfirmationService';
 import { describeMessage, recipientLabel, senderLabel } from './nlu/messageFormat';
-import { capitalizeFirst, countInWords, joinList } from './nlu/text';
+import { capitalizeFirst, countInWords, joinList, normalizeCommand } from './nlu/text';
+import type { ContactMatch } from './ContactService';
 
 export interface StatusSnapshot {
   whatsapp: boolean;
@@ -37,6 +39,15 @@ export interface CommandProcessorDeps {
   aiProvider: AIProvider;
   /** Status atualizado dos serviços (usado pela intenção STATUS). */
   getStatus: () => Promise<StatusSnapshot>;
+  /** Agenda de contatos do WhatsApp (opcional): permite escrever para qualquer contato. */
+  contacts?: {
+    search(query: string): ContactMatch[];
+    lookupPhone(spoken: string): Promise<ContactMatch | undefined>;
+    sync(): Promise<number>;
+    count(): number;
+  };
+  /** Controle de TV pela rede (opcional). */
+  tvService?: { execute(command: TvCommand): Promise<string> };
 }
 
 /** Notificado quando a intenção foi entendida e a ação vai ser executada. */
@@ -51,12 +62,33 @@ const ALLOWED_WHILE_CONFIRMING: IntentType[] = [
   'READ_LAST_MESSAGE',
   'REPEAT',
   'REPLY_TO_MESSAGE',
+  'TV_CONTROL',
 ];
 
+/** Para quem vai a mensagem: uma conversa recebida (resposta) ou um contato da agenda (nova). */
+interface Recipient {
+  chatId: string;
+  label: string;
+  context?: IncomingMessage;
+  kind: 'reply' | 'new';
+}
+
+/** Perguntas pendentes ("qual Letícia?", "o que dizer?") expiram após 2 minutos. */
+const PENDING_TTL_MS = 120000;
+const CANCEL_PENDING = /^(?:nao|cancela|cancelar|cancele|deixa|deixa pra la|esquece|esqueca|nada|nenhum|nenhuma)\b/;
+/** Com uma pergunta pendente, estes comandos são atendidos normalmente (não viram conteúdo). */
+const COMMANDS_WHILE_PENDING: IntentType[] = [
+  'STATUS', 'HELP', 'STOP', 'LIST_MESSAGES', 'READ_LAST_MESSAGE', 'TV_CONTROL', 'SYNC_CONTACTS', 'REPEAT',
+];
+const ORDINALS: Array<[RegExp, number]> = [
+  [/\b(primeir[oa]|1)\b/, 0], [/\b(segund[oa]|2)\b/, 1], [/\b(terceir[oa]|3)\b/, 2], [/\b(quart[oa]|4)\b/, 3],
+];
+const MASCULINE_COUNT = ['zero', 'um', 'dois', 'três', 'quatro'];
+
 const HELP_TEXT =
-  'Posso dizer o status do sistema, listar e ler suas mensagens e responder mensagens do WhatsApp, ' +
-  'sempre pedindo confirmação antes de enviar. Experimente: "leia a última mensagem" ou ' +
-  '"responde para o João dizendo que já vou verificar".';
+  'Posso dizer o status do sistema, listar e ler suas mensagens, responder mensagens do WhatsApp ' +
+  'sempre pedindo confirmação, enviar mensagens para seus contatos e controlar a TV. ' +
+  'Experimente: "leia a última mensagem" ou "desliga a TV".';
 
 /**
  * Ponto único de processamento de comandos. O CLI e a voz chegam aqui com
@@ -64,6 +96,9 @@ const HELP_TEXT =
  */
 export class CommandProcessor {
   private lastSpoken?: string;
+  private draftRecipient?: Recipient;
+  private pendingChoice?: { candidates: ContactMatch[]; content: string; expires: number };
+  private awaitingContent?: { recipient: Recipient; expires: number };
 
   constructor(private deps: CommandProcessorDeps) {}
 
@@ -81,10 +116,10 @@ export class CommandProcessor {
         result = { intent: 'UNKNOWN', reply: 'Não recebi nenhum comando.' };
       } else {
         this.recoverFromError();
-        result =
-          this.deps.stateMachine.getCurrentState() === 'WAITING_CONFIRMATION'
-            ? await this.handleWhileConfirming(text, source, onStage)
-            : await this.handle(text, source, onStage);
+        const confirming = this.deps.stateMachine.getCurrentState() === 'WAITING_CONFIRMATION';
+        result = confirming
+          ? await this.handleWhileConfirming(text, source, onStage)
+          : (await this.handlePendingQuestion(text, onStage)) ?? (await this.handle(text, source, onStage));
       }
     } catch (error) {
       Logger.error('Error processing command', error);
@@ -172,6 +207,10 @@ export class CommandProcessor {
         return { intent: 'DENY', reply: 'Tudo bem.' };
       case 'CANCEL':
         return { intent: 'CANCEL', reply: 'Não há nada para cancelar.' };
+      case 'SYNC_CONTACTS':
+        return { intent: 'SYNC_CONTACTS', reply: await this.syncContacts() };
+      case 'TV_CONTROL':
+        return { intent: 'TV_CONTROL', reply: await this.controlTv(intent) };
       case 'REPEAT':
         return { intent: 'REPEAT', reply: this.lastSpoken ?? 'Ainda não disse nada para repetir.' };
       default:
@@ -274,49 +313,177 @@ export class CommandProcessor {
 
   /**
    * Prepara o rascunho e pede confirmação. Nunca envia diretamente.
-   * Sem destinatário explícito, usa a mensagem em foco (a última anunciada/lida).
+   * Destinatário: citado pelo nome (conversa recebida ou contato da agenda) ou, sem nome,
+   * a mensagem em foco (a última anunciada/lida).
    */
   private async prepareReply(intent: MessageIntent): Promise<string> {
-    const { messageService, responseService, stateMachine, eventBus } = this.deps;
+    const { messageService } = this.deps;
 
     if (!messageService.isConnected()) {
-      return 'O WhatsApp está desconectado, então não consigo responder agora.';
+      return 'O WhatsApp está desconectado, então não consigo enviar mensagens agora.';
     }
 
-    let message: IncomingMessage | undefined;
+    const content = intent.response?.trim() ?? '';
+    let recipient: Recipient;
     if (intent.target) {
-      message = messageService.findLatestFrom(intent.target);
-      if (!message) {
-        return `Não encontrei nenhuma mensagem recente de ${intent.target}. Só consigo responder mensagens recebidas enquanto estou ligada.`;
+      const resolved = await this.resolveTarget(intent.target, content);
+      if (typeof resolved === 'string') {
+        return resolved;
       }
+      recipient = resolved;
     } else {
-      message = messageService.getFocusedMessage() ?? messageService.getLatestMessage();
+      const message = messageService.getFocusedMessage() ?? messageService.getLatestMessage();
+      if (!message) {
+        return 'Não há nenhuma mensagem para responder. Para escrever para alguém, diga por exemplo: "envie uma mensagem para a Letícia dizendo que já estou saindo".';
+      }
+      messageService.setFocusedMessage(message);
+      recipient = { chatId: message.chatId, label: recipientLabel(message), context: message, kind: 'reply' };
     }
 
-    if (!message) {
-      return 'Não há nenhuma mensagem para responder.';
+    return content ? this.draft(recipient, content) : this.askContent(recipient);
+  }
+
+  /** Nome falado → destinatário. Retorna texto quando precisa perguntar ou não encontrou. */
+  private async resolveTarget(target: string, content: string): Promise<Recipient | string> {
+    const { messageService, contacts } = this.deps;
+
+    // Quem mandou mensagem nesta sessão: responde na mesma conversa.
+    const fromInbox = messageService.findLatestFrom(target);
+    if (fromInbox) {
+      messageService.setFocusedMessage(fromInbox);
+      return { chatId: fromInbox.chatId, label: recipientLabel(fromInbox), context: fromInbox, kind: 'reply' };
     }
 
-    messageService.setFocusedMessage(message);
-    const recipient = recipientLabel(message);
-
-    const content = intent.response?.trim();
-    if (!content) {
-      return `O que você quer responder para ${recipient}? Diga, por exemplo: "responde que já vou verificar".`;
+    let matches = contacts?.search(target) ?? [];
+    if (!matches.length && target.replace(/\D/g, '').length >= 8) {
+      const byPhone = await contacts?.lookupPhone(target);
+      if (!byPhone) return `O número ${target} não tem WhatsApp ou não consegui verificá-lo.`;
+      matches = [byPhone];
     }
 
-    // Um novo pedido de resposta substitui o rascunho anterior.
+    if (!matches.length) {
+      if (!contacts || contacts.count() === 0) {
+        return 'Ainda não conheço seus contatos. Diga "atualizar contatos" para eu sincronizar a agenda do WhatsApp.';
+      }
+      return `Não encontrei ${target} nos seus contatos.`;
+    }
+
+    if (matches.length > 1) {
+      this.pendingChoice = { candidates: matches, content, expires: Date.now() + PENDING_TTL_MS };
+      const count = MASCULINE_COUNT[matches.length] ?? String(matches.length);
+      return `Encontrei ${count} contatos com esse nome: ${joinList(matches.map((m) => m.label))}. Para qual deles?`;
+    }
+
+    return { chatId: matches[0].contact.id, label: matches[0].label, kind: 'new' };
+  }
+
+  private askContent(recipient: Recipient): string {
+    this.awaitingContent = { recipient, expires: Date.now() + PENDING_TTL_MS };
+    return recipient.kind === 'reply'
+      ? `O que você quer responder para ${recipient.label}?`
+      : `O que você quer dizer para ${recipient.label}?`;
+  }
+
+  private async draft(recipient: Recipient, content: string): Promise<string> {
+    const { responseService, stateMachine, eventBus } = this.deps;
+    this.pendingChoice = undefined;
+    this.awaitingContent = undefined;
+
+    // Um novo pedido substitui o rascunho anterior.
     if (stateMachine.getCurrentState() === 'WAITING_CONFIRMATION') {
       stateMachine.clearPendingData();
       stateMachine.transition('IDLE');
     }
 
     stateMachine.transition('GENERATING_RESPONSE');
-    const reply = await responseService.composeReply(content, message);
-    stateMachine.setTargetChatId(message.chatId);
-    await eventBus.emit('RESPONSE_GENERATED', { response: reply });
+    const text = await responseService.composeReply(content, recipient.context);
+    stateMachine.setTargetChatId(recipient.chatId);
+    this.draftRecipient = recipient;
+    await eventBus.emit('RESPONSE_GENERATED', { response: text });
 
-    return responseService.requestConfirmation(reply, recipient);
+    return responseService.requestConfirmation(text, recipient.label, recipient.kind === 'new' ? 'mensagem' : 'resposta');
+  }
+
+  /**
+   * Respostas às perguntas da própria Celeste: "qual Letícia?" e "o que dizer?".
+   * Retorna null quando o texto não é uma resposta a elas (segue o fluxo normal).
+   */
+  private async handlePendingQuestion(text: string, onStage?: CommandStageListener): Promise<CommandResult | null> {
+    const now = Date.now();
+    if (this.pendingChoice && now > this.pendingChoice.expires) this.pendingChoice = undefined;
+    if (this.awaitingContent && now > this.awaitingContent.expires) this.awaitingContent = undefined;
+    if (!this.pendingChoice && !this.awaitingContent) return null;
+
+    const normalized = normalizeCommand(text);
+    const intent = this.deps.intentClassifier.classifyDeterministic(text);
+    const isCommand =
+      (intent && COMMANDS_WHILE_PENDING.includes(intent.intent)) ||
+      (intent?.intent === 'REPLY_TO_MESSAGE' && Boolean(intent.target));
+    if (isCommand) {
+      this.pendingChoice = undefined;
+      this.awaitingContent = undefined;
+      return null;
+    }
+    if (CANCEL_PENDING.test(normalized) && (this.pendingChoice || normalized.split(' ').length <= 3)) {
+      this.pendingChoice = undefined;
+      this.awaitingContent = undefined;
+      onStage?.('ACTION');
+      return { intent: 'CANCEL', reply: 'Tudo bem, cancelei a mensagem.' };
+    }
+
+    if (this.pendingChoice) {
+      const { candidates, content } = this.pendingChoice;
+      const choice = this.pickCandidate(normalized, candidates);
+      if (!choice) {
+        return {
+          intent: 'UNKNOWN',
+          reply: `Não entendi qual deles. Diga o nome completo ou "o primeiro", "o segundo"... Opções: ${joinList(candidates.map((c) => c.label))}.`,
+        };
+      }
+      this.pendingChoice = undefined;
+      onStage?.('ACTION');
+      const recipient: Recipient = { chatId: choice.contact.id, label: choice.label, kind: 'new' };
+      return { intent: 'REPLY_TO_MESSAGE', reply: content ? await this.draft(recipient, content) : this.askContent(recipient) };
+    }
+
+    // Aguardando o conteúdo: o que foi dito É a mensagem.
+    const { recipient } = this.awaitingContent!;
+    this.awaitingContent = undefined;
+    const content =
+      intent?.intent === 'REPLY_TO_MESSAGE' && intent.response
+        ? intent.response
+        : text.trim().replace(/^(?:celeste[\s,]+)?(?:(?:diga|diz|fala|fale|dizendo|avisa|avise)\s+)?que\s+/i, '');
+    onStage?.('ACTION');
+    return { intent: 'REPLY_TO_MESSAGE', reply: await this.draft(recipient, content) };
+  }
+
+  private pickCandidate(normalized: string, candidates: ContactMatch[]): ContactMatch | undefined {
+    for (const [pattern, index] of ORDINALS) {
+      if (pattern.test(normalized) && candidates[index]) return candidates[index];
+    }
+    if (/\bultim[oa]\b/.test(normalized)) return candidates[candidates.length - 1];
+    const words = new Set(normalized.split(' '));
+    const scored = candidates
+      .map((candidate) => ({
+        candidate,
+        shared: normalizeCommand(candidate.label).split(' ').filter((token) => words.has(token)).length,
+      }))
+      .sort((a, b) => b.shared - a.shared);
+    if (scored[0]?.shared && scored[0].shared > (scored[1]?.shared ?? 0)) return scored[0].candidate;
+    return undefined;
+  }
+
+  private async syncContacts(): Promise<string> {
+    const { contacts, messageService } = this.deps;
+    if (!contacts) return 'A agenda de contatos não está disponível.';
+    if (!messageService.isConnected()) return 'O WhatsApp está desconectado, então não consigo sincronizar os contatos agora.';
+    try {
+      const count = await contacts.sync();
+      return `Sincronizei sua agenda: conheço ${count} contatos.`;
+    } catch (error) {
+      Logger.warn('Contact sync failed', { error: String(error) });
+      return `Não consegui sincronizar a agenda agora. Conheço ${contacts.count()} contatos.`;
+    }
   }
 
   private async confirmAndSend(): Promise<CommandResult> {
@@ -360,11 +527,24 @@ export class CommandProcessor {
 
   private pendingRecipient(): string {
     const chatId = this.deps.stateMachine.getTargetChatId();
+    if (this.draftRecipient && this.draftRecipient.chatId === chatId) {
+      return this.draftRecipient.label;
+    }
     const focused = this.deps.messageService.getFocusedMessage();
     if (focused && focused.chatId === chatId) {
       return recipientLabel(focused);
     }
     return (chatId && this.deps.messageService.getDisplayName(chatId)) || 'o contato';
+  }
+
+  private async controlTv(intent: MessageIntent): Promise<string> {
+    if (!this.deps.tvService) {
+      return 'O controle de TV está desativado.';
+    }
+    if (!intent.tv) {
+      return 'O que você quer que eu faça com a TV?';
+    }
+    return this.deps.tvService.execute(intent.tv);
   }
 
   private unknownReply(): string {

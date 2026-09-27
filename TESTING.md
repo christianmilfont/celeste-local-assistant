@@ -105,6 +105,22 @@ Type `como estão os serviços?` → same answer as the spoken "status".
 7. `/stop` → the avatar window closes
 8. Visual check: with Celeste running open `http://127.0.0.1:7717/?demo=1` (SVG fallback: `/variants/pointcloud/?demo=1`)
 
+### Test 7e: Smart TV (Samsung)
+1. With the TV on and on the same network, start Celeste: the panel shows `TV: Samsung ... (192.168.x.x) [não pareada]`
+2. Say/type "a TV está ligada?" → "A TV está ligada." (no prompt on the TV)
+3. Say "aumenta o volume em 2" → Celeste asks you to accept the authorization on the TV screen → accept with the remote → volume goes up by 2
+4. "abre o YouTube" → YouTube opens; "tira o som da TV" → mutes
+5. "desliga a TV" → the TV turns off; "a TV está ligada?" → "modo de espera"/"desligada"
+6. "liga a TV" → turns on (requires the TV option to power on via network/mobile)
+
+### Test 7f: Messages to contacts
+1. Restart Celeste: the panel shows `Contatos: N` (if N is small, say "atualizar contatos")
+2. Say "envie uma mensagem para <nome de um contato> dizendo que estou testando a Celeste"
+3. Celeste answers "Preparei esta mensagem para <nome completo>: ... Posso enviar?" → say "pode"
+4. The contact receives the message
+5. With a name shared by 2+ contacts, Celeste asks "Para qual deles?" → answer with the surname
+6. "envia uma mensagem para <nome>" (no text) → Celeste asks what to say → dictate the message
+
 ### Test 8: Status Command
 Type `/status` in the CLI
 

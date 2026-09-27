@@ -43,7 +43,7 @@
    * como uma mandíbula. Com h = 0 os dois arcos coincidem numa só linha.
    */
   function mouthShape(h, s) {
-    var halfWidth = 20 - h * 0.3;
+    var halfWidth = 27 - h * 0.35;
     var upper = [];
     var lower = [];
     for (var i = 0; i < DOTS; i++) {

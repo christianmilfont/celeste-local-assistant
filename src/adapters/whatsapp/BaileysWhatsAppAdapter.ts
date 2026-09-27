@@ -5,7 +5,7 @@ import makeWASocket, {
   BaileysEventMap,
 } from '@whiskeysockets/baileys';
 import { MessagingAdapter } from '../../core/types/adapters';
-import { IncomingMessage } from '../../core/types';
+import { ContactRecord, IncomingMessage } from '../../core/types';
 import { Config } from '../../infrastructure/config/Config';
 import { Logger } from '../../infrastructure/logging/Logger';
 import * as fs from 'fs';
@@ -18,6 +18,7 @@ export class BaileysWhatsAppAdapter implements MessagingAdapter {
   private messageCallback: ((message: IncomingMessage) => Promise<void>) | null =
     null;
   private connected: boolean = false;
+  private contactsCallback: ((contacts: ContactRecord[]) => void) | null = null;
 
   async connect(): Promise<void> {
     try {
@@ -77,6 +78,11 @@ export class BaileysWhatsAppAdapter implements MessagingAdapter {
 
       this.socket.ev.on('creds.update', saveCreds);
 
+      // Contatos: agenda do celular (sincronização de estado), histórico e atualizações.
+      this.socket.ev.on('contacts.upsert', (contacts) => this.emitContacts(contacts));
+      this.socket.ev.on('contacts.update', (contacts) => this.emitContacts(contacts as any[]));
+      this.socket.ev.on('messaging-history.set', ({ contacts }) => this.emitContacts(contacts || []));
+
       this.socket.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type === 'notify') {
           for (const message of messages) {
@@ -112,6 +118,34 @@ export class BaileysWhatsAppAdapter implements MessagingAdapter {
     this.messageCallback = callback;
   }
 
+  onContacts(callback: (contacts: ContactRecord[]) => void): void {
+    this.contactsCallback = callback;
+  }
+
+  /** Baixa de novo a coleção de estado que contém a agenda (nomes salvos no celular). */
+  async syncContacts(): Promise<void> {
+    if (!this.socket || !this.connected) {
+      throw new Error('WhatsApp not connected');
+    }
+    await this.socket.resyncAppState(['critical_unblock_low'], true);
+  }
+
+  async lookupPhone(phone: string): Promise<string | undefined> {
+    if (!this.socket || !this.connected) {
+      return undefined;
+    }
+    const [result] = (await this.socket.onWhatsApp(phone)) || [];
+    return result?.exists ? result.jid : undefined;
+  }
+
+  private emitContacts(contacts: Array<Partial<ContactRecord> & { id?: string }>): void {
+    if (!this.contactsCallback || !contacts?.length) return;
+    const records = contacts
+      .filter((c): c is ContactRecord => typeof c.id === 'string')
+      .map((c) => ({ id: c.id, name: c.name, notify: c.notify, phoneNumber: c.phoneNumber }));
+    if (records.length) this.contactsCallback(records);
+  }
+
   async sendMessage(chatId: string, text: string): Promise<void> {
     if (!this.socket || !this.connected) {
       throw new Error('WhatsApp not connected');
@@ -131,6 +165,11 @@ export class BaileysWhatsAppAdapter implements MessagingAdapter {
   ): Promise<void> {
     try {
       const message = this.convertToIncomingMessage(baileysMessage);
+
+      // Quem manda mensagem também vira contato conhecido (com o nome do perfil).
+      if (!message.isGroup && message.senderName) {
+        this.emitContacts([{ id: message.chatId, notify: message.senderName }]);
+      }
 
       // Reações, confirmações de leitura e mensagens de protocolo não têm texto.
       if (!message.text) {

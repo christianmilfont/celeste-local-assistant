@@ -1,3 +1,7 @@
+import type { TvCommand } from './tv';
+
+export type { TvCommand };
+
 export interface IncomingMessage {
   id: string;
   chatId: string;
@@ -7,6 +11,18 @@ export interface IncomingMessage {
   timestamp: Date;
   isGroup: boolean;
   groupName?: string;
+}
+
+/** Contato como chega do WhatsApp (agenda do celular, nome de perfil, histórico). */
+export interface ContactRecord {
+  /** JID do contato (…@s.whatsapp.net ou …@lid). */
+  id: string;
+  /** Nome salvo na agenda do celular. */
+  name?: string;
+  /** Nome que o próprio contato definiu no perfil do WhatsApp. */
+  notify?: string;
+  /** JID no formato de telefone (…@s.whatsapp.net), quando o id é LID. */
+  phoneNumber?: string;
 }
 
 export interface ConversationContext {
@@ -26,6 +42,8 @@ export interface MessageIntent {
   source?: 'rule' | 'ai';
   /** READ_LAST_MESSAGE: reler a mensagem em foco ("leia novamente"). */
   again?: boolean;
+  /** TV_CONTROL: o que fazer com a TV. */
+  tv?: TvCommand;
 }
 
 export type IntentType =
@@ -39,6 +57,8 @@ export type IntentType =
   | 'CONFIRM'
   | 'DENY'
   | 'REPEAT'
+  | 'TV_CONTROL'
+  | 'SYNC_CONTACTS'
   | 'UNKNOWN';
 
 /** Origem de um comando: todas convergem para o mesmo CommandProcessor. */

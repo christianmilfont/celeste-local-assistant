@@ -12,6 +12,10 @@ import {
 } from '../application/CommandProcessor';
 import { SpeechInputService } from '../application/SpeechInputService';
 import { AvatarService } from '../application/AvatarService';
+import { TvService } from '../application/TvService';
+import { ContactService } from '../application/ContactService';
+import { SqliteContactStore } from '../infrastructure/storage/ContactStore';
+import { TvDevice } from './types/tv';
 import { VoicePipeline, VoiceTurnResult } from '../application/VoicePipeline';
 import { describeMessage } from '../application/nlu/messageFormat';
 import {
@@ -49,6 +53,7 @@ export class Celeste {
   private voicePipeline?: VoicePipeline;
   private database: CelesteDatabase;
   private avatarService: AvatarService;
+  private contactService: ContactService;
 
   /** Serializa comandos e anúncios para que não disputem o estado nem o alto-falante. */
   private queue: Promise<unknown> = Promise.resolve();
@@ -60,7 +65,8 @@ export class Celeste {
     private aiProvider: AIProvider,
     private sttProvider: SpeechToTextProvider,
     private ttsProvider: TextToSpeechProvider,
-    private audioRecorder?: AudioRecorder
+    private audioRecorder?: AudioRecorder,
+    private tvService?: TvService
   ) {
     this.eventBus = new EventBus();
     this.stateMachine = new StateMachine();
@@ -78,6 +84,9 @@ export class Celeste {
 
     const confirmationService = new ConfirmationService();
 
+    this.contactService = new ContactService(new SqliteContactStore(this.database), messagingAdapter);
+    messagingAdapter.onContacts?.((contacts) => this.contactService.upsert(contacts));
+
     this.responseService = new ResponseService(
       aiProvider,
       this.eventBus,
@@ -94,6 +103,8 @@ export class Celeste {
       confirmationService,
       aiProvider,
       getStatus: () => this.refreshStatus(),
+      contacts: this.contactService,
+      tvService,
     });
 
     if (audioRecorder) {
@@ -118,11 +129,16 @@ export class Celeste {
 
       await this.checkServices();
 
-      // Carrega os modelos (Whisper e LLM) em segundo plano para o primeiro comando ser rápido.
+      // Carrega os modelos (Whisper, voz e LLM) em segundo plano para o primeiro comando ser rápido.
+      void this.ttsProvider.warmUp?.();
       this.sttProvider.warmUp?.().catch((error) => {
         Logger.warn('Whisper warm-up failed', { error: String(error) });
       });
       void this.aiProvider.warmUp?.();
+      // Agenda de contatos: se ainda conhece poucos, sincroniza assim que o WhatsApp conectar.
+      void this.ensureContacts();
+      // Procura as TVs da rede local se ainda não conhece nenhuma.
+      void this.tvService?.init();
 
       Logger.info('Celeste started successfully');
     } catch (error) {
@@ -151,6 +167,7 @@ export class Celeste {
   dispose(): void {
     this.avatarService.dispose();
     this.voiceService.stopSpeaking();
+    this.ttsProvider.dispose?.();
     this.audioRecorder?.dispose?.();
     this.sttProvider.dispose?.();
   }
@@ -246,6 +263,31 @@ export class Celeste {
   }
 
   // ---- Estado -------------------------------------------------------------
+
+  /** Quantos contatos (com nome) a Celeste conhece. */
+  getContactCount(): number {
+    return this.contactService.count();
+  }
+
+  private async ensureContacts(): Promise<void> {
+    if (this.contactService.count() >= 10 || !this.messagingAdapter.syncContacts) return;
+    const deadline = Date.now() + 90000;
+    while (!this.messagingAdapter.isConnected() && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    if (!this.messagingAdapter.isConnected()) return;
+    try {
+      const count = await this.contactService.sync();
+      Logger.info('Contacts synced', { count });
+    } catch (error) {
+      Logger.warn('Automatic contact sync failed', { error: String(error) });
+    }
+  }
+
+  /** TVs conhecidas (controle pela rede local). */
+  getTvs(): TvDevice[] {
+    return this.tvService?.list() ?? [];
+  }
 
   getAvatarState(): AvatarState {
     return this.avatarService.getState();

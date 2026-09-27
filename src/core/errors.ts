@@ -59,3 +59,23 @@ export class CelesteError extends Error {
     return new CelesteError('UNKNOWN', detail);
   }
 }
+
+export type TvErrorCode =
+  | 'UNREACHABLE'
+  | 'UNAUTHORIZED'
+  | 'PAIRING_TIMEOUT'
+  | 'APP_NOT_FOUND'
+  | 'NO_MAC'
+  | 'WOL_NO_RESPONSE'
+  | 'UNSUPPORTED';
+
+/** Falhas no controle de TV pela rede (convertidas em respostas faladas pelo TvService). */
+export class TvError extends Error {
+  constructor(
+    readonly code: TvErrorCode,
+    detail?: string
+  ) {
+    super(detail ? `${code}: ${detail}` : code);
+    this.name = 'TvError';
+  }
+}

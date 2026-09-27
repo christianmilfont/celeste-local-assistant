@@ -105,7 +105,7 @@ Erro: ERROR → (Celeste fala o problema) → IDLE      Ctrl+C: qualquer estado 
 - Ollama (para IA local)
 - Python 3.9+ com `faster-whisper` (reconhecimento de voz local)
 - Microfone (Windows: nenhuma ferramenta extra; Linux/macOS: `sox`)
-- Piper TTS (apenas Linux/macOS; no Windows é usada a voz nativa)
+- Voz neural Kokoro (`kokoro-onnx`, opcional; sem ela usa a voz do sistema)
 
 ## Instalação
 
@@ -237,6 +237,27 @@ PIPER_VOICE_PATH=
 **Nota:** No Windows, o sistema usa a síntese de voz nativa (System.Speech) e escolhe
 automaticamente uma voz pt-BR instalada (ex.: "Microsoft Maria Desktop"). Para escolher outra:
 `TTS_VOICE=Microsoft Maria Desktop` e `TTS_RATE=0` (-10 a 10).
+
+## Voz neural (Kokoro)
+
+A voz da Celeste é gerada localmente pelo **Kokoro-82M** (licença Apache 2.0), uma voz neural
+natural, com a voz feminina pt-BR **pf_dora**. Tudo roda offline, na CPU.
+
+**Instalação** (uma vez):
+```bash
+.venv/Scripts/python -m pip install kokoro-onnx sounddevice
+.venv/Scripts/python scripts/tts/download_kokoro.py      # ~340 MB em models/kokoro/
+```
+
+**Configuração (`.env`):** `KOKORO_VOICE=pf_dora` (ou `pm_alex`, `pm_santa`), `KOKORO_SPEED=0.95`
+(0.9 = mais calma), `TTS_ENGINE=neural` (ou `system` para a voz do Windows).
+
+**Como fica fluida:** um worker Python persistente (`scripts/tts/kokoro_worker.py`) mantém o modelo
+carregado, divide a fala em trechos crescentes e **toca num único fluxo de áudio contínuo** enquanto
+sintetiza os próximos; o início é planejado para a fala sair sem pausas (≈1–2 s até começar).
+A interrupção (ENTER para falar durante uma fala) é imediata.
+
+**Reserva:** se o modelo não estiver instalado ou falhar, a Celeste usa automaticamente a voz do Windows.
 
 ## Microfone
 
@@ -428,6 +449,58 @@ mouse), `?hud=0`, `?captions=0`, `?demo=1`, `?state=SPEAKING`.
 versão SVG leve, `variants/pointcloud/` (mesma nuvem de pontos, estática, custo ≈ zero). A versão
 "Skynet" continua em `variants/skynet/index.html`.
 
+### Enviar mensagens para seus contatos
+
+Além de responder quem escreveu, a Celeste escreve para **qualquer contato da sua agenda**:
+
+- "Celeste, envie uma mensagem para a Letícia dizendo que sairei para o treino"
+- "manda um recado pro João que chego às 8" · "avisa a minha mãe que já estou saindo"
+- "mensagem para 85 99999-1234: chego em 10 minutos" (número sem estar salvo)
+
+Como funciona:
+- **Agenda:** os nomes salvos no seu celular chegam pela sincronização do WhatsApp e ficam na
+  tabela `contacts` do SQLite. Na inicialização, se a Celeste conhece poucos contatos, ela pede a
+  agenda completa; também dá para pedir: **"atualizar contatos"**. O painel mostra `Contatos: N`.
+- **Busca por nome** sem acentos ("Leticia" encontra "Letícia Souza"); "minha mãe" encontra "Mãe".
+- **Vários com o mesmo nome:** "Encontrei dois contatos: Letícia Lima e Letícia Souza. Para qual
+  deles?" — responda com o sobrenome ou "a primeira"/"a segunda".
+- **Sem o texto:** "envia uma mensagem para a Letícia" → "O que você quer dizer para Letícia Souza?"
+  → o que você disser a seguir é a mensagem ("cancela" desiste).
+- **Confirmação obrigatória**, com o nome completo do contato: nada é enviado sem "sim"/"pode".
+- Se a pessoa escreveu durante a sessão, a Celeste responde na mesma conversa.
+
+Se a sincronização não trouxer os nomes, desvincule e vincule de novo o WhatsApp (apague a pasta
+`sessions/` e escaneie o QR Code): no primeiro pareamento o WhatsApp envia a agenda completa.
+
+### Controle de Smart TV (rede local)
+
+A Celeste controla Smart TVs pela rede local, sem nenhum hardware extra (sem Raspberry Pi, ESP32,
+Broadlink etc.): o próprio computador fala com a TV pelo Wi-Fi/rede.
+
+| Marca | Status |
+|---|---|
+| Samsung (Tizen, 2016+) | ✅ ligar, desligar, volume, mudo, pausar/continuar, tela inicial, abrir apps |
+| LG (webOS) / Android TV | detectadas na descoberta; adaptador ainda não implementado |
+
+**Exemplos (falados ou digitados):** "desliga a TV", "liga a TV", "aumenta o volume em 5",
+"abaixa o som", "tira o som da TV", "abre o YouTube", "coloca a Netflix na TV", "pausa o filme",
+"continua o vídeo", "a TV está ligada?", "procurar TVs", "conectar na TV".
+Com várias TVs: "desliga a TV da sala" (veja `TV_ALIASES`).
+
+**Como funciona (Samsung):**
+- descoberta automática via SSDP/UPnP ao iniciar (se ainda não conhece nenhuma TV) ou com "procurar TVs";
+  o id estável e o MAC vêm da API da TV, então uma troca de IP (DHCP) é corrigida sozinha;
+- status: `GET http://<ip>:8001/api/v2/` (ligada / modo de espera);
+- comandos: WebSocket `wss://<ip>:8002` com as teclas do controle remoto;
+- **primeiro uso:** a TV mostra um pedido de autorização para "Celeste" — aceite com o controle
+  remoto; o token fica salvo (tabela `settings` do SQLite) e não é pedido de novo;
+- **ligar:** se a TV está em modo de espera de rede, envia a tecla POWER; se está totalmente
+  desligada, envia Wake-on-LAN. Para isso funcionar, ative na TV a opção de ligar pela rede/celular
+  (em modelos Samsung: *Configurações > Geral > Rede > Configurações especialistas >
+  Ligar com dispositivo móvel*).
+
+**Configuração (`.env`):** `TV_ENABLED=true`; `TV_ALIASES="192.168.15.74=da sala;<ip-ou-id>=do quarto"`.
+
 ### Logs
 
 O terminal mostra apenas avisos e erros (`LOG_CONSOLE_LEVEL=warn`) para não poluir a interface.
@@ -557,6 +630,14 @@ Se você implementar provedores alternativos nas fases futuras:
 - ✅ Holograma facial 3D (Three.js): constelação de pontos, rotação pelo mouse, bloom, aberração cromática e scanlines
 - ✅ Olhos em partículas concentradas, boca pontilhada animada na fala
 - ✅ Fallback SVG automático sem WebGL
+
+### Fase 1.7 - Controle de Smart TV ✅
+- ✅ Samsung Tizen pela rede local: ligar (Wake-on-LAN), desligar, volume, mudo, apps
+- ✅ Descoberta automática (SSDP) e pareamento com token
+
+### Fase 1.8 (Atual) - Mensagens para contatos ✅
+- ✅ Agenda do WhatsApp sincronizada (SQLite), busca por nome, desambiguação e confirmação
+- ✅ Voz neural local (Kokoro, pf_dora)
 - ✅ Estados IDLE / LISTENING / THINKING / SPEAKING / ERROR
 - ✅ Boca sincronizada com o início/fim real do TTS
 - ✅ Janela própria ou tela cheia (kiosk), pronta para display dedicado

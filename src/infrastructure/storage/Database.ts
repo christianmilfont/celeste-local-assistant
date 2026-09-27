@@ -81,6 +81,12 @@ export class CelesteDatabase {
         ON assistant_events(timestamp);
     `);
 
+    // Migração: nome de perfil do WhatsApp (push name) dos contatos.
+    const contactColumns = this.db.prepare('PRAGMA table_info(contacts)').all() as Array<{ name: string }>;
+    if (!contactColumns.some((column) => column.name === 'push_name')) {
+      this.db.exec('ALTER TABLE contacts ADD COLUMN push_name TEXT');
+    }
+
     Logger.info('Database schema initialized successfully');
   }
 

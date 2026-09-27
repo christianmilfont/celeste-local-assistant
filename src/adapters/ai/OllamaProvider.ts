@@ -15,7 +15,13 @@ const KNOWN_INTENTS: IntentType[] = [
   'CONFIRM',
   'DENY',
   'REPEAT',
+  'TV_CONTROL',
+  'SYNC_CONTACTS',
   'UNKNOWN',
+];
+
+const TV_ACTIONS = [
+  'POWER_ON', 'POWER_OFF', 'VOLUME_UP', 'VOLUME_DOWN', 'MUTE', 'PAUSE', 'PLAY', 'HOME', 'OPEN_APP', 'STATUS',
 ];
 
 export class OllamaProvider implements AIProvider {
@@ -73,6 +79,14 @@ export class OllamaProvider implements AIProvider {
       response:
         typeof parsed?.response === 'string' && parsed.response.trim() ? parsed.response.trim() : undefined,
       confidence: typeof parsed?.confidence === 'number' ? parsed.confidence : 0.5,
+      tv:
+        intent === 'TV_CONTROL' && TV_ACTIONS.includes(String(parsed?.tv?.action).toUpperCase())
+          ? {
+              action: String(parsed.tv.action).toUpperCase(),
+              app: typeof parsed.tv.app === 'string' ? parsed.tv.app : undefined,
+              amount: typeof parsed.tv.amount === 'number' ? parsed.tv.amount : undefined,
+            }
+          : undefined,
     };
 
     Logger.debug('Intent parsed', { intent: result.intent });
@@ -182,15 +196,17 @@ Classifique o comando em UMA intenção:
 - STOP: pedir para desligar/encerrar a Celeste
 - LIST_MESSAGES: perguntar quais/quantas mensagens recebeu
 - READ_LAST_MESSAGE: pedir para ler uma mensagem recebida
-- REPLY_TO_MESSAGE: pedir para responder/enviar uma mensagem a alguém
+- REPLY_TO_MESSAGE: pedir para responder ou enviar uma mensagem a alguém (target = nome do contato)
+- SYNC_CONTACTS: pedir para atualizar/sincronizar os contatos
 - CANCEL: cancelar a ação atual
 - CONFIRM: confirmar ("sim", "pode mandar")
 - DENY: negar ("não")
 - REPEAT: pedir para repetir o que a Celeste disse
+- TV_CONTROL: controlar a TV (ligar, desligar, volume, mudo, pausar, continuar, abrir aplicativo)
 - UNKNOWN: nenhuma das anteriores
 
 Retorne SOMENTE um JSON com esta estrutura:
-{"intent": "<INTENÇÃO>", "target": "<nome do contato citado ou null>", "response": "<texto que o usuário quer enviar, em primeira pessoa, ou null>", "confidence": <0.0 a 1.0>}
+{"intent": "<INTENÇÃO>", "target": "<nome do contato citado ou null>", "response": "<texto que o usuário quer enviar, em primeira pessoa, ou null>", "tv": {"action": "<POWER_ON|POWER_OFF|VOLUME_UP|VOLUME_DOWN|MUTE|PAUSE|PLAY|HOME|OPEN_APP|STATUS>", "app": "<nome do app ou null>", "amount": <número ou null>} ou null, "confidence": <0.0 a 1.0>}
 
 Comando do usuário: "${transcription}"`;
 

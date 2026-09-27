@@ -225,10 +225,20 @@ export class TerminalInterface {
       `MIC:      ${status.mic ? 'ONLINE' : 'OFFLINE'}`,
       `State:    ${status.state} / voz: ${status.voice}`,
       ...(this.avatarUrl ? [`Avatar:   ${this.avatarUrl}`] : []),
+      `Contatos: ${this.celeste.getContactCount()}`,
+      `TV:       ${this.describeTvs()}`,
       '',
       LINE,
     ];
     this.print(lines.join('\n'));
+  }
+
+  private describeTvs(): string {
+    const tvs = this.celeste.getTvs();
+    if (tvs.length === 0) return 'nenhuma encontrada ainda';
+    return tvs
+      .map((tv) => `${tv.alias ? tv.alias + ' — ' : ''}${tv.name.replace(/^\[TV\]\s*/, '')} (${tv.ip})${tv.token ? '' : ' [não pareada]'}`)
+      .join(', ');
   }
 
   private renderHelp(): void {
@@ -244,6 +254,10 @@ export class TerminalInterface {
         '  "Quais mensagens eu recebi?" "Leia a última mensagem"',
         '  "Responde para o João dizendo que já vou verificar"',
         '  "Pode enviar" / "Cancela"    "Repete"    "Desligar"',
+        '  "Envie uma mensagem para a Letícia dizendo que já estou saindo"',
+        '  "Atualizar contatos" (sincroniza a agenda do WhatsApp)',
+        '  "Desliga a TV"   "Aumenta o volume em 5"   "Abre o YouTube"',
+        '  "Procurar TVs"   "Conectar na TV" (autorize na tela da TV)',
         '',
         'Comandos do terminal:',
         '  /status   - Verifica e mostra o status dos serviços',

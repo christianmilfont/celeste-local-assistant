@@ -74,6 +74,30 @@ export class Config {
     return process.env.PIPER_VOICE_PATH || '';
   }
 
+  /** Motor de voz: "neural" (Kokoro, local) ou "system" (voz do Windows/Piper). */
+  static get ttsEngine(): 'neural' | 'system' {
+    return process.env.TTS_ENGINE === 'system' ? 'system' : 'neural';
+  }
+
+  /** Voz do Kokoro: pf_dora (feminina pt-BR), pm_alex, pm_santa (masculinas pt-BR). */
+  static get kokoroVoice(): string {
+    return process.env.KOKORO_VOICE || 'pf_dora';
+  }
+
+  /** Velocidade da fala (0.8 = mais calma, 1.0 = normal). */
+  static get kokoroSpeed(): number {
+    const value = parseFloat(process.env.KOKORO_SPEED || '');
+    return Number.isFinite(value) && value > 0.4 && value < 2 ? value : 0.95;
+  }
+
+  static get kokoroModel(): string {
+    return process.env.KOKORO_MODEL || './models/kokoro/kokoro-v1.0.onnx';
+  }
+
+  static get kokoroVoices(): string {
+    return process.env.KOKORO_VOICES || './models/kokoro/voices-v1.0.bin';
+  }
+
   /** Nome da voz do Windows (ex.: "Microsoft Maria Desktop"). Vazio = primeira voz pt-BR. */
   static get ttsVoice(): string {
     return process.env.TTS_VOICE || '';
@@ -154,6 +178,21 @@ export class Config {
 
   static get avatarFullscreen(): boolean {
     return process.env.AVATAR_FULLSCREEN === 'true';
+  }
+
+  /** Controle de Smart TVs pela rede local. */
+  static get tvEnabled(): boolean {
+    return process.env.TV_ENABLED !== 'false';
+  }
+
+  /** Apelidos das TVs: "192.168.15.74=da sala;<uuid>=do quarto". */
+  static get tvAliases(): Record<string, string> {
+    const aliases: Record<string, string> = {};
+    for (const pair of (process.env.TV_ALIASES || '').split(';')) {
+      const [key, alias] = pair.split('=').map((part) => part?.trim());
+      if (key && alias) aliases[key] = alias;
+    }
+    return aliases;
   }
 
   static get aiTemperature(): number {

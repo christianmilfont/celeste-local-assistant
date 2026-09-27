@@ -5,7 +5,14 @@ import { BaileysWhatsAppAdapter } from './adapters/whatsapp/BaileysWhatsAppAdapt
 import { OllamaProvider } from './adapters/ai/OllamaProvider';
 import { WhisperProvider } from './adapters/stt/WhisperProvider';
 import { PiperTTSProvider } from './adapters/tts/PiperTTSProvider';
+import { KokoroTTSProvider } from './adapters/tts/KokoroTTSProvider';
+import { FallbackTTSProvider } from './adapters/tts/FallbackTTSProvider';
+import { TextToSpeechProvider } from './core/types/adapters';
 import { createAudioRecorder } from './adapters/audio';
+import { createTvController, discoverTvs } from './adapters/tv';
+import { TvService } from './application/TvService';
+import { SettingsTvRegistry } from './infrastructure/storage/TvRegistry';
+import { CelesteDatabase } from './infrastructure/storage/Database';
 import { TerminalInterface } from './interfaces/cli/TerminalInterface';
 import { AvatarServer } from './interfaces/avatar/AvatarServer';
 import { openAvatarWindow } from './interfaces/avatar/avatarWindow';
@@ -20,16 +27,33 @@ async function main() {
     const messagingAdapter = new BaileysWhatsAppAdapter();
     const aiProvider = new OllamaProvider();
     const sttProvider = new WhisperProvider();
-    const ttsProvider = new PiperTTSProvider();
+    // Voz neural local (Kokoro) com a voz do sistema como reserva.
+    const systemVoice = new PiperTTSProvider();
+    const ttsProvider: TextToSpeechProvider =
+      Config.ttsEngine === 'neural' && KokoroTTSProvider.modelFilesPresent()
+        ? new FallbackTTSProvider(new KokoroTTSProvider(), systemVoice)
+        : systemVoice;
     const audioRecorder = createAudioRecorder();
+
+    // Smart TVs na rede local (Samsung Tizen), sem hardware extra.
+    let celesteRef: Celeste | undefined;
+    const tvService = Config.tvEnabled
+      ? new TvService(new SettingsTvRegistry(CelesteDatabase.getInstance()), createTvController, {
+          discover: () => discoverTvs(),
+          notify: (text) => celesteRef?.speak(text) ?? Promise.resolve(),
+          aliases: Config.tvAliases,
+        })
+      : undefined;
 
     celeste = new Celeste(
       messagingAdapter,
       aiProvider,
       sttProvider,
       ttsProvider,
-      audioRecorder
+      audioRecorder,
+      tvService
     );
+    celesteRef = celeste;
 
     // Garante que gravador/Whisper/TTS/janela do avatar não fiquem órfãos se o processo terminar.
     const instance = celeste;

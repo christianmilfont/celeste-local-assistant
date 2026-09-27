@@ -55,3 +55,6 @@ audio/
 # Session data
 sessions/
 auth_info_baileys/
+
+# Modelos locais (TTS)
+models/

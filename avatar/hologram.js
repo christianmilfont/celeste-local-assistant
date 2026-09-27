@@ -40,7 +40,7 @@ document.querySelector('.stage').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 50);
-camera.position.set(0, 0, 8.4);
+camera.position.set(0, 0, 7.8);
 
 const head = new THREE.Group();
 head.position.y = -0.12;
@@ -88,7 +88,7 @@ const SURFACE_GLSL = /* glsl */ `
     float rim = pow(1.0 - clamp(abs(facing), 0.0, 1.0), 1.6);
     float key = pow(max(dot(n, normalize(vec3(-0.5, 0.55, 0.7))), 0.0), 1.5);
     float front = smoothstep(-0.25, 0.2, facing);            // o que está de costas fica tênue (holograma)
-    float fade = smoothstep(1.62, 1.2, yObj) * smoothstep(-1.62, -1.25, yObj);
+    float fade = smoothstep(1.46, 1.08, yObj) * smoothstep(-1.76, -1.48, yObj);
     float twinkle = 0.88 + 0.12 * sin(uTime * 1.7 + aPhase * 6.2831);
     return (0.06 + 0.62 * rim + 0.42 * key) * mix(0.22, 1.0, front) * aShell
          * (0.35 + 0.65 * fade) * twinkle * uBreath * uIntensity;
@@ -171,7 +171,7 @@ const eyeMaterial = new THREE.ShaderMaterial({
 });
 
 // Boca: linha pontilhada sutil (as posições mudam só durante a fala).
-const MOUTH_DOTS = 17;
+const MOUTH_DOTS = 23;
 const mouthUniforms = { ...shared, uMouth: { value: 0.7 } };
 const mouthMaterial = new THREE.ShaderMaterial({
   uniforms: mouthUniforms,
@@ -184,7 +184,7 @@ const mouthMaterial = new THREE.ShaderMaterial({
     void main() {
       vec4 mv = modelViewMatrix * vec4(position, 1.0);
       vAlpha = (0.25 + 0.75 * aWeight) * uMouth * uIntensity;
-      gl_PointSize = (0.022 + 0.022 * aWeight) * uPixelRatio * (900.0 / -mv.z);
+      gl_PointSize = (0.026 + 0.026 * aWeight) * uPixelRatio * (900.0 / -mv.z);
       gl_Position = projectionMatrix * mv;
     }`,
   fragmentShader: OUTPUT_SRGB + SRGB_GLSL + /* glsl */ `
@@ -286,7 +286,7 @@ function gaussian() {
 function mouthShape(h, s) {
   const pos = [];
   const weight = [];
-  const halfWidth = 20 - h * 0.3;
+  const halfWidth = 27 - h * 0.35;
   for (const lower of [false, true]) {
     for (let i = 0; i < MOUTH_DOTS; i++) {
       const t = i / (MOUTH_DOTS - 1);
@@ -295,7 +295,7 @@ function mouthShape(h, s) {
       const corner = (1 - bulge) * -s;
       const y = lower ? corner + h * 0.78 * bulge : corner - h * 0.22 * bulge;
       const lx = x / 100;
-      pos.push(mouthCenter.x + lx, mouthCenter.y - y / 100, mouthCenter.z - lx * lx * 1.4);
+      pos.push(mouthCenter.x + lx, mouthCenter.y - y / 100, mouthCenter.z - lx * lx * 1.2);
       weight.push(lower && h === 0 ? 0 : bulge);
     }
   }
@@ -303,8 +303,8 @@ function mouthShape(h, s) {
 }
 
 const MOUTH_SHAPES = {
-  IDLE: [0, 0.2], MOUTH_CLOSED: [0, 0.2], MOUTH_SMALL: [3.5, 0.1],
-  MOUTH_MEDIUM: [7, 0], MOUTH_OPEN: [11, -0.2], FROWN: [0, -1.2],
+  IDLE: [0, 0.3], MOUTH_CLOSED: [0, 0.3], MOUTH_SMALL: [4.5, 0.15],
+  MOUTH_MEDIUM: [9, 0], MOUTH_OPEN: [14, -0.3], FROWN: [0, -1.6],
 };
 const MOUTH_OPENNESS = { MOUTH_SMALL: 0.35, MOUTH_MEDIUM: 0.65, MOUTH_OPEN: 1 };
 let currentMouth = null;
@@ -378,7 +378,7 @@ function resize() {
   renderer.setSize(w, h);
   camera.aspect = w / h;
   // Em janelas largas, afasta a câmera para a cabeça continuar inteira.
-  camera.position.z = w / h < 0.8 ? 8.4 / Math.max(w / h / 0.8, 0.72) : 8.4;
+  camera.position.z = w / h < 0.8 ? 7.8 / Math.max(w / h / 0.8, 0.72) : 7.8;
   camera.updateProjectionMatrix();
   if (composer) {
     composer.setSize(w, h);

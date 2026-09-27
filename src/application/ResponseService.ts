@@ -72,10 +72,14 @@ export class ResponseService {
     }
   }
 
-  async requestConfirmation(response: string, senderName?: string): Promise<string> {
+  async requestConfirmation(
+    response: string,
+    senderName?: string,
+    kind: 'resposta' | 'mensagem' = 'resposta'
+  ): Promise<string> {
     const confirmationText = senderName
-      ? `Preparei esta resposta para ${senderName}: "${response}". Posso enviar?`
-      : `Preparei esta resposta: "${response}". Posso enviar?`;
+      ? `Preparei esta ${kind} para ${senderName}: "${response}". Posso enviar?`
+      : `Preparei esta ${kind}: "${response}". Posso enviar?`;
 
     Logger.info('Requesting confirmation');
 

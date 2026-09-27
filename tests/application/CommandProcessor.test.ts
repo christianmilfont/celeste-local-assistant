@@ -192,7 +192,7 @@ describe('CommandProcessor', () => {
       const { processor, receive, stateMachine } = setup();
       await receive({ senderName: 'João' });
       const result = await processor.processCommand('Responde para a Carla que já vou');
-      expect(result.reply).toContain('Não encontrei nenhuma mensagem recente de Carla');
+      expect(result.reply).toContain('Ainda não conheço seus contatos');
       expect(stateMachine.getCurrentState()).toBe('IDLE');
     });
 
@@ -201,7 +201,7 @@ describe('CommandProcessor', () => {
       await receive();
       messaging.connected = false;
       const result = await processor.processCommand('responde que ok');
-      expect(result.reply).toBe('O WhatsApp está desconectado, então não consigo responder agora.');
+      expect(result.reply).toBe('O WhatsApp está desconectado, então não consigo enviar mensagens agora.');
     });
 
     it('keeps the draft when sending fails, so the user can retry', async () => {

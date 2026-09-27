@@ -25,17 +25,24 @@ HTML = os.path.join(os.path.dirname(__file__), '..', '..', 'avatar', 'variants',
 
 # ---------------------------------------------------------------- silhueta (meia-largura por altura)
 # Mesma silhueta da cabeça usada antes: topo em y=50, queixo em y=358, olhos em y≈206.
-Y_TOP, Y_CHIN, CX = 50.0, 358.0, 200.0
+Y_TOP, Y_CHIN, CX = 64.0, 366.0, 200.0
+
+
+# Meia-largura da cabeça por altura (pontos de controle), inspirada em proporções de retrato
+# (método Loomis / rostos de modelos):
+#  - topo arredondado; parte mais larga nas maçãs do rosto (altas);
+#  - leve afinamento sob as maçãs e ÂNGULO DO MAXILAR marcado (~y 302, ~84% da largura das maçãs);
+#  - linha do maxilar reta até um QUEIXO COM LARGURA, arredondado e levemente quadrado (não pontudo).
+_PROFILE_Y = np.array([Y_TOP, 68, 76, 88, 104, 124, 150, 180, 206, 228, 246, 262, 276, 290, 302,
+                       312, 324, 336, 346, 354, 360, 364, Y_CHIN])
+_PROFILE_W = np.array([0.0, 31, 46, 61, 73, 82, 87, 88, 89, 91, 90, 86, 81, 78, 76,
+                       70, 60, 51, 46, 43, 41, 36, 0])   # queixo quadrado: base larga e reta
 
 
 def half_width(y):
-    """Meia-largura da cabeça na altura y (crânio arredondado, mandíbula afinando até o queixo)."""
+    """Meia-largura da cabeça na altura y."""
     y = np.asarray(y, dtype=float)
-    t = np.clip((y - Y_TOP) / (Y_CHIN - Y_TOP), 0, 1)
-    cranium = 99 * np.sqrt(np.clip(1 - ((y - 165) / 115) ** 2, 0, 1))
-    jaw_t = np.clip((y - 235) / (Y_CHIN - 235), 0, 1)
-    jaw = 83 * np.clip(1 - jaw_t ** 2.6, 0, 1) ** 0.5   # queixo arredondado
-    return np.where(y < 165, cranium, np.where(y < 235, 99 - 16 * ((y - 165) / 70) ** 2, jaw)) * (t >= 0)
+    return np.interp(y, _PROFILE_Y, _PROFILE_W, left=0.0, right=0.0)
 
 
 def gauss(x, y, cx, cy, sx, sy):
@@ -48,22 +55,37 @@ def depth(x, y):
     u = np.clip((x - CX) / w, -1, 1)
     base = 78 * np.sqrt(np.clip(1 - u ** 2, 0, 1))
     # topo do crânio: a profundidade também cai a zero (casca elipsoidal, sem aresta ao girar)
-    base = base * np.where(y < 165, np.sqrt(np.clip(1 - ((165 - y) / 118) ** 2, 0, 1)), 1)
+    base = base * np.where(y < 165, np.sqrt(np.clip(1 - ((165 - y) / 104) ** 2, 0, 1)), 1)
     z = base
-    # nariz: dorso crescendo até a ponta + asas
-    ridge = np.clip((y - 200) / 64, 0, 1)
-    z = z + 26 * ridge ** 1.3 * gauss(x, y, CX, 262, 6 + 4 * ridge, 40) * (y < 272)
-    z = z + 6 * gauss(x, y, CX - 11, 266, 5, 4) + 6 * gauss(x, y, CX + 11, 266, 5, 4)
-    # órbitas (afundadas) e arco das sobrancelhas
+    # nariz: dorso fino e reto, ponta delicada, asas estreitas
+    ridge = np.clip((y - 204) / 60, 0, 1)
+    z = z + 22 * ridge ** 1.4 * gauss(x, y, CX, 262, 4.5 + 3 * ridge, 38) * (y < 270)
+    z = z + 4 * gauss(x, y, CX - 9, 265, 4, 3.5) + 4 * gauss(x, y, CX + 9, 265, 4, 3.5)
+    # filtro labial (duas cristas suaves entre nariz e boca)
+    z = z + 1.5 * gauss(x, y, CX - 4, 283, 1.8, 7) + 1.5 * gauss(x, y, CX + 4, 283, 1.8, 7)
     for ex in (160, 240):
-        z = z - 14 * gauss(x, y, ex, 207, 17, 9)
-        z = z + 5 * gauss(x, y, ex, 186, 20, 5)
-        z = z + 6 * gauss(x, y, ex - 12 if ex < CX else ex + 12, 246, 14, 8)   # maçãs do rosto
-        z = z - 4 * gauss(x, y, ex, 288, 14, 12)                              # bochechas
-    # lábios e queixo
-    z = z + 6 * gauss(x, y, CX, 296, 18, 5) + 7 * gauss(x, y, CX, 306, 16, 5)
-    z = z - 2.5 * gauss(x, y, CX, 301, 20, 1.3)
-    z = z + 6 * gauss(x, y, CX, 340, 13, 9)
+        side = -1 if ex < CX else 1
+        z = z - 12 * gauss(x, y, ex, 207, 17, 9)                              # órbitas
+        z = z + 2.5 * gauss(x, y, ex + side * 4, 187, 20, 4)                  # sobrancelha suave
+        z = z - 3 * gauss(x, y, ex + side * 40, 188, 9, 14)                   # têmpora
+        # maçã do rosto alta + arco zigomático em direção à têmpora
+        z = z + 10 * gauss(x, y, ex + side * 16, 236, 12, 6)
+        z = z + 5 * gauss(x, y, ex + side * 32, 229, 12, 4)
+        z = z - 7 * gauss(x, y, ex + side * 10, 284, 12, 13)                  # bochecha funda
+        # sulco nasolabial suave: da asa do nariz ao canto da boca
+        for t in np.linspace(0, 1, 5):
+            z = z - 1.6 * gauss(x, y, CX + side * (12 + 12 * t), 272 + 24 * t, 3, 3)
+        # crista da linha do maxilar: do ângulo (~y 302) até a lateral do queixo
+        for t in np.linspace(0, 1, 8):
+            z = z + 2.8 * gauss(x, y, CX + side * (75 - 36 * t), 302 + 44 * t, 5, 5)
+    # lábios cheios (superior com arco do cupido, inferior mais volumoso)
+    z = z + 7 * gauss(x, y, CX - 7, 295, 11, 4) + 7 * gauss(x, y, CX + 7, 295, 11, 4)
+    z = z + 10 * gauss(x, y, CX, 307, 20, 5)
+    z = z - 3 * gauss(x, y, CX, 301, 27, 1.3)
+    # sulco mentolabial (covinha sob o lábio) e queixo largo e arredondado
+    z = z - 3 * gauss(x, y, CX, 322, 17, 3)
+    z = z + 3.5 * gauss(x, y, CX - 14, 346, 12, 10) + 3.5 * gauss(x, y, CX + 14, 346, 12, 10)
+    z = z + 2 * gauss(x, y, CX, 346, 16, 10)
     return z
 
 
@@ -83,7 +105,7 @@ y = (gy + rng.uniform(-SPACING / 2, SPACING / 2, gy.shape)).ravel()
 inside = np.abs(x - CX) < half_width(y) * 0.995
 x, y = x[inside], y[inside]
 
-EXCLUDE = [(160, 206, 23, 8.5), (240, 206, 23, 8.5), (200, 301, 21, 8)]  # olhos e boca (camadas próprias)
+EXCLUDE = [(160, 206, 23, 8.5), (240, 206, 23, 8.5), (200, 301, 28, 9)]  # olhos e boca (camadas próprias)
 for ex, ey, rx, ry in EXCLUDE:
     keep = ((x - ex) / rx) ** 2 + ((y - ey) / ry) ** 2 > 1
     x, y = x[keep], y[keep]
@@ -100,11 +122,18 @@ for ex in (160, 240):
     extra += list(zip(ex + 25 * np.cos(a), 207 + 11 * np.sin(a)))            # contorno das órbitas
     extra += list(zip(np.linspace(ex - 22, ex + 22, 12), 186 - 3 * np.sin(np.linspace(0, np.pi, 12))))
 t = np.linspace(0, 1, 16)
-extra += list(zip(CX + 0 * t, 212 + 50 * t))                                  # dorso do nariz
-extra += list(zip(CX - 14 + 28 * t, 268 + 4 * np.sin(np.pi * t)))             # base do nariz
+extra += list(zip(CX + 0 * t, 214 + 46 * t))                                  # dorso do nariz
+extra += list(zip(CX - 11 + 22 * t, 267 + 3 * np.sin(np.pi * t)))             # base do nariz
 for side in (-1, 1):
-    extra += list(zip(CX + side * (60 - 58 * t) , 300 + 56 * t ** 1.2))      # mandíbula
-extra += list(zip(CX + 30 * np.cos(np.linspace(np.pi, 2 * np.pi, 14)), 344 + 10 * np.sin(np.linspace(np.pi, 2 * np.pi, 14)) * -1))
+    extra += list(zip(CX + side * (76 - 36 * t), 302 + 44 * t))              # linha do maxilar
+    extra += list(zip(CX + side * (58 + 18 * t), 272 + 30 * t))               # ramo até o ângulo
+    extra += list(zip(CX + side * (34 + 20 * t), 232 + 4 * t))                # maçãs altas
+# contorno do queixo quadrado: laterais, cantos arredondados e base reta
+extra += list(zip(CX + np.linspace(-30, 30, 13), np.full(13, 363.0)))           # base
+for side in (-1, 1):
+    corner = np.linspace(0, np.pi / 2, 6)
+    extra += list(zip(CX + side * (30 + 10 * np.sin(corner)), 353 + 10 * np.cos(corner)))  # cantos
+    extra += list(zip(np.full(4, CX + side * 41.0), np.linspace(338, 352, 4)))  # laterais
 ex_pts = np.array(extra) + rng.normal(0, 0.6, (len(extra), 2))
 ok = np.abs(ex_pts[:, 0] - CX) < half_width(ex_pts[:, 1])
 ex_pts = ex_pts[ok]
@@ -134,7 +163,7 @@ rim = (1 - np.clip(n[:, 2], 0, 1)) ** 1.6
 key = np.clip(n @ light, 0, 1)
 brightness = np.clip(0.12 + 0.62 * rim + 0.6 * key ** 1.5, 0, 1)
 # o topo do crânio e o queixo somem suavemente (cabeça "flutuando")
-fade = np.clip((y - 48) / 30, 0, 1) * np.clip((366 - y) / 26, 0, 1)
+fade = np.clip((y - 62) / 28, 0, 1) * np.clip((378 - y) / 24, 0, 1)
 brightness *= 0.35 + 0.65 * fade
 
 # ---------------------------------------------------------------- ligações (vizinhos mais próximos)
@@ -271,13 +300,13 @@ fn = np.concatenate([fn, normal(ex_pts[:, 0], ex_pts[:, 1])])
 
 # casca traseira esparsa (crânio), só para dar volume quando a cabeça gira
 bx = rng.uniform(96, 304, 2600)
-by = rng.uniform(52, 300, 2600)
+by = rng.uniform(66, 300, 2600)
 w_b = half_width(by)
 okb = np.abs(bx - CX) < w_b * 0.98
 bx, by, w_b = bx[okb], by[okb], w_b[okb]
 ub = (bx - CX) / w_b
 bz = (-88 * np.sqrt(np.clip(1 - ub ** 2, 0, 1)) * np.clip((330 - by) / 60, 0.2, 1)
-      * np.where(by < 165, np.sqrt(np.clip(1 - ((165 - by) / 118) ** 2, 0, 1)), 1))
+      * np.where(by < 165, np.sqrt(np.clip(1 - ((165 - by) / 104) ** 2, 0, 1)), 1))
 bn = np.stack([ub, np.zeros_like(ub), -np.sqrt(np.clip(1 - ub ** 2, 0, 1))], axis=1)
 bn /= np.linalg.norm(bn, axis=1, keepdims=True)
 keep_b = rng.uniform(0, 1, bx.shape) < 0.45

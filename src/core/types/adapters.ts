@@ -1,4 +1,4 @@
-import { IncomingMessage, ConversationContext } from './index';
+import { IncomingMessage, ConversationContext, ContactRecord } from './index';
 
 export type { IncomingMessage, ConversationContext };
 
@@ -8,6 +8,12 @@ export interface MessagingAdapter {
   isConnected(): boolean;
   onMessage(callback: (message: IncomingMessage) => Promise<void>): void;
   sendMessage(chatId: string, text: string): Promise<void>;
+  /** Contatos recebidos do WhatsApp (agenda sincronizada, histórico, remetentes). */
+  onContacts?(callback: (contacts: ContactRecord[]) => void): void;
+  /** Força a sincronização completa da agenda de contatos. */
+  syncContacts?(): Promise<void>;
+  /** Verifica se um telefone tem WhatsApp; devolve o JID. */
+  lookupPhone?(phone: string): Promise<string | undefined>;
 }
 
 export interface AIProvider {
@@ -46,6 +52,10 @@ export interface TextToSpeechProvider {
   checkAvailability?(): Promise<boolean>;
   /** Interrompe a fala em andamento, se houver. */
   stop?(): void;
+  /** Carrega o modelo de voz em segundo plano. */
+  warmUp?(): Promise<void>;
+  /** Libera processos/recursos (ex.: worker da voz neural). */
+  dispose?(): void;
 }
 
 /**
