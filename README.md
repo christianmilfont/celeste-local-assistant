@@ -59,7 +59,7 @@ celeste-local-assistant/
 │   │   └── storage/              # Banco de dados
 │   │
 │   └── index.ts                  # Ponto de entrada (composição)
-├── avatar/                       # Frontend do avatar 2D (SVG + CSS + JS, sem build)
+├── avatar/                       # Frontend do avatar (holograma Three.js + variantes SVG, sem build)
 ├── scripts/avatar/generate_pointcloud.py # Gera o rosto em nuvem de pontos
 ├── scripts/avatar/generate_circuits.py   # Gera os circuitos da variante "skynet"
 ├── scripts/stt/whisper_worker.py # Worker do Whisper
@@ -389,51 +389,44 @@ fraco), `?demo=1` (percorre todos os estados sem backend), `?state=SPEAKING` (pr
 **Display dedicado (futuro):** qualquer navegador serve, por exemplo num Raspberry Pi:
 `chromium-browser --kiosk "http://<ip-do-pc>:7717/?hud=0"` com `AVATAR_HOST=0.0.0.0`.
 
-**Direção visual:** cabeça flutuante em **nuvem de pontos azuis conectados**, como um escaneamento
-3D / holograma de IA — sem pescoço, ombros ou pele pintada. O volume vem da densidade e do brilho dos
-pontos (mais fortes nas bordas e nos contornos: nariz, órbitas, mandíbula), com a cabeça levemente
-girada para o relevo aparecer. Os olhos são **orbes de luz** — bolas claras na cor do estado, com halo (**não piscam**) — e a
-boca é uma linha de pontos (maiores e mais claros no centro, afinando nos cantos) que, na fala,
-se abre em dois arcos — o de baixo desce como uma mandíbula — com um brilho suave entre eles.
+**Direção visual:** holograma facial 3D estilo constelação (Three.js/WebGL): rede de pontos e
+ligações em ciano sobre fundo escuro, olhos formados por aglomerados densos de partículas, boca como
+uma linha pontilhada sutil. A cabeça gira suavemente seguindo o mouse, as luzes "respiram" devagar e
+a imagem passa por bloom, aberração cromática leve nas bordas e scanlines sutis. HUD monoespaçado
+com leve cintilação.
 
 | Estado | Visual |
 |---|---|
-| IDLE | tudo parado: nenhuma animação |
-| LISTENING | pontos e olhos mais intensos (ciano claro) |
-| THINKING | azul-violeta, brilho dos olhos oscilando devagar |
-| SPEAKING | boca de pontos em movimento, legenda |
+| IDLE | ciano, respiração lenta (30 fps) |
+| LISTENING | mais intenso, olhos mais brilhantes |
+| THINKING | azul-violeta, respiração mais rápida |
+| SPEAKING | boca pontilhada abrindo/fechando com a fala, olhos acompanham, legenda |
 | ERROR | vermelho, boca levemente para baixo |
 
-**Como é leve:**
+**Arquivos:** `avatar/index.html` + `hologram.js` + `hologram.css`. O Three.js (dependência `three`)
+é servido localmente pelo `AvatarServer` em `/vendor/three/` (sem CDN; funciona offline).
+A malha vem de `avatar/assets/face-mesh.json`, gerada por
+`.venv/Scripts/python scripts/avatar/generate_pointcloud.py` a partir de um modelo 3D procedural
+da cabeça (posições, normais e ligações; o shader calcula o brilho de recorte conforme a rotação).
 
-| Camada | Tipo | Custo em execução |
-|---|---|---|
-| `assets/face-cloud.svg` | pontos e ligações (máscara colorida por CSS) | nenhum (rasterizada uma vez; recolorida só na troca de estado) |
-| `assets/face-highlights.svg` | pontos mais brilhantes | nenhum |
-| olhos | orbes SVG (gradiente na cor do estado) | só `opacity` (oscilação em passos apenas em THINKING) |
-| boca | SVG pequeno | redesenha só durante a fala (~12 fps) |
+**Performance** (alvo GTX 1050 Ti):
+- `BufferGeometry` + `Points`/`LineSegments` nativos com `ShaderMaterial` próprio — ~3,4 mil pontos,
+  ~5,9 mil ligações e ~840 partículas nos olhos em 4 draw calls, sem objetos por partícula;
+- `pixelRatio` limitado a 2; bloom do `UnrealBloomPass`; aberração cromática + scanlines + vinheta +
+  grão + conversão sRGB num **único** `ShaderPass`;
+- 30 fps em IDLE (sem mouse ativo) e 60 fps nos demais estados; o navegador pausa em segundo plano;
+- a janela da Celeste abre com `--force_high_performance_gpu`, para usar a GPU dedicada em notebooks
+  com duas placas (sem isso o Edge desenhava na Intel HD 630).
 
-A nuvem é **procedural**: `.venv/Scripts/python scripts/avatar/generate_pointcloud.py` (requer
-`numpy`, já instalado no `.venv`) constrói um modelo 3D da cabeça (elipsoide + relevos de nariz,
-órbitas, sobrancelhas, maçãs, lábios e queixo), amostra pontos na superfície, calcula o brilho pela
-normal, liga cada ponto aos vizinhos, gira a cabeça (`YAW`) e escreve no `index.html` a posição
-projetada dos olhos e da boca. Mude a semente, `YAW`, `SPACING` ou os relevos para outro rosto.
+Medido neste PC (GTX 1050 Ti, janela 420×560): uso da GPU ~1% em IDLE e ~2% em SPEAKING/THINKING;
+CPU dos processos do navegador ~6–7% (renderização) em IDLE e ~10% em SPEAKING.
 
-**Performance** (Edge, janela 420×560, processos de renderização + GPU, % de 1 núcleo, neste PC):
+**Parâmetros:** `?lite=1` (sem pós-processamento), `?yaw=20` (ângulo fixo em graus, para display sem
+mouse), `?hud=0`, `?captions=0`, `?demo=1`, `?state=SPEAKING`.
 
-| Estado | Renderização | GPU |
-|---|---|---|
-| IDLE | ~0,4–0,9% | 0% |
-| LISTENING | ~0–1,3% | 0% |
-| THINKING | ~1–2,5% | ~1% |
-| SPEAKING | ~0,7–2,4% | ~0,5–1% |
-
-Na mesma medição, uma janela vazia do Edge ficou entre 3,6% e 8,4% (ruído do próprio navegador):
-em repouso o avatar custa o mesmo que uma imagem estática.
-
-**Versão anterior** (humanoide sintética estilo "Skynet", com circuitos e fluxo de dados):
-continua disponível em `http://127.0.0.1:7717/variants/skynet/index.html`
-(assets gerados por `scripts/avatar/generate_circuits.py`).
+**Fallback e variantes:** sem WebGL (ou se o Three.js não carregar) a página abre automaticamente a
+versão SVG leve, `variants/pointcloud/` (mesma nuvem de pontos, estática, custo ≈ zero). A versão
+"Skynet" continua em `variants/skynet/index.html`.
 
 ### Logs
 
@@ -561,8 +554,9 @@ Se você implementar provedores alternativos nas fases futuras:
 - ✅ Respostas faladas e tratamento de erros por voz
 
 ### Fase 1.6 (Atual) - Avatar 2D ✅
-- ✅ Cabeça holográfica em nuvem de pontos (procedural), olhos em orbes de luz, boca de pontos animada na fala
-- ✅ Custo em repouso ≈ imagem estática
+- ✅ Holograma facial 3D (Three.js): constelação de pontos, rotação pelo mouse, bloom, aberração cromática e scanlines
+- ✅ Olhos em partículas concentradas, boca pontilhada animada na fala
+- ✅ Fallback SVG automático sem WebGL
 - ✅ Estados IDLE / LISTENING / THINKING / SPEAKING / ERROR
 - ✅ Boca sincronizada com o início/fim real do TTS
 - ✅ Janela própria ou tela cheia (kiosk), pronta para display dedicado

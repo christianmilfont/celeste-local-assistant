@@ -97,13 +97,13 @@ Type `como estão os serviços?` → same answer as the spoken "status".
 
 ### Test 7d: Avatar 2D
 1. On startup a small "Celeste" window opens (address shown as `Avatar:` in the panel)
-2. At rest: `IDLE`, the point-cloud face stays completely still (no blinking by design)
-3. Press ENTER → `LISTENING` (points and eyes brighter); ENTER again → `THINKING` (blue-violet, eyes slowly pulsing)
+2. At rest: `IDLE`, the 3D hologram breathes slowly; moving the mouse over the window rotates the head
+3. Press ENTER → `LISTENING` (brighter); ENTER again → `THINKING` (blue-violet, faster breathing)
 4. While she answers → `SPEAKING` (dotted mouth opens/closes with the voice, caption shown) → back to `IDLE`
 5. Receive a WhatsApp message → `MESSAGE` then `SPEAKING` during the announcement
 6. Stay silent in a voice turn → `ERROR` (red) while she says she did not understand → `IDLE`
 7. `/stop` → the avatar window closes
-8. Visual check without backend: open `avatar/index.html?demo=1` in the browser
+8. Visual check: with Celeste running open `http://127.0.0.1:7717/?demo=1` (SVG fallback: `/variants/pointcloud/?demo=1`)
 
 ### Test 8: Status Command
 Type `/status` in the CLI

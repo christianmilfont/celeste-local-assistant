@@ -21,7 +21,7 @@ OUT = os.path.join(os.path.dirname(__file__), '..', '..', 'avatar', 'assets')
 VIEWBOX = '30 40 340 425'
 rng = np.random.default_rng(2029)
 YAW = math.radians(-14)   # cabeça levemente girada (quase três quartos): o relevo aparece na projeção
-HTML = os.path.join(os.path.dirname(__file__), '..', '..', 'avatar', 'index.html')
+HTML = os.path.join(os.path.dirname(__file__), '..', '..', 'avatar', 'variants', 'pointcloud', 'index.html')
 
 # ---------------------------------------------------------------- silhueta (meia-largura por altura)
 # Mesma silhueta da cabeça usada antes: topo em y=50, queixo em y=358, olhos em y≈206.
@@ -34,7 +34,7 @@ def half_width(y):
     t = np.clip((y - Y_TOP) / (Y_CHIN - Y_TOP), 0, 1)
     cranium = 99 * np.sqrt(np.clip(1 - ((y - 165) / 115) ** 2, 0, 1))
     jaw_t = np.clip((y - 235) / (Y_CHIN - 235), 0, 1)
-    jaw = 83 * (1 - jaw_t ** 1.7) ** 0.62
+    jaw = 83 * np.clip(1 - jaw_t ** 2.6, 0, 1) ** 0.5   # queixo arredondado
     return np.where(y < 165, cranium, np.where(y < 235, 99 - 16 * ((y - 165) / 70) ** 2, jaw)) * (t >= 0)
 
 
@@ -47,6 +47,8 @@ def depth(x, y):
     w = np.maximum(half_width(y), 1e-3)
     u = np.clip((x - CX) / w, -1, 1)
     base = 78 * np.sqrt(np.clip(1 - u ** 2, 0, 1))
+    # topo do crânio: a profundidade também cai a zero (casca elipsoidal, sem aresta ao girar)
+    base = base * np.where(y < 165, np.sqrt(np.clip(1 - ((165 - y) / 118) ** 2, 0, 1)), 1)
     z = base
     # nariz: dorso crescendo até a ponta + asas
     ridge = np.clip((y - 200) / 64, 0, 1)
@@ -237,3 +239,83 @@ for name, content in (('face-cloud.svg', cloud), ('face-highlights.svg', highlig
         fh.write(content)
     print(f'{name}: {len(content) / 1024:.1f} KB')
 print(f'{len(pts)} pontos, {len(links)} ligações')
+
+
+# ================================================================ malha 3D (versão WebGL)
+# Para o holograma em Three.js a cabeça gira ao vivo, então exportamos o modelo em 3D:
+# posições, normais (o shader calcula o brilho de recorte conforme a rotação) e ligações.
+import json
+
+
+def sample_front(spacing, density):
+    gx3, gy3 = np.meshgrid(np.arange(96, 305, spacing), np.arange(46, 362, spacing))
+    px = (gx3 + rng.uniform(-spacing / 2, spacing / 2, gx3.shape)).ravel()
+    py = (gy3 + rng.uniform(-spacing / 2, spacing / 2, gy3.shape)).ravel()
+    ok = np.abs(px - CX) < half_width(py) * 0.995
+    px, py = px[ok], py[ok]
+    for ex, ey, rx, ry in EXCLUDE:
+        keep = ((px - ex) / rx) ** 2 + ((py - ey) / ry) ** 2 > 1
+        px, py = px[keep], py[keep]
+    nn = normal(px, py)
+    acc = rng.uniform(0, 1, px.shape) < np.clip(density / np.clip(nn[:, 2], 0.25, 1), 0, 1)
+    px, py = px[acc], py[acc]
+    return px, py, depth(px, py), normal(px, py)
+
+
+fx, fy, fz, fn = sample_front(3.3, 0.40)
+# pontos extras das feições (mesmos do SVG), agora com profundidade
+fx = np.concatenate([fx, ex_pts[:, 0]])
+fy = np.concatenate([fy, ex_pts[:, 1]])
+fz = np.concatenate([fz, depth(ex_pts[:, 0], ex_pts[:, 1])])
+fn = np.concatenate([fn, normal(ex_pts[:, 0], ex_pts[:, 1])])
+
+# casca traseira esparsa (crânio), só para dar volume quando a cabeça gira
+bx = rng.uniform(96, 304, 2600)
+by = rng.uniform(52, 300, 2600)
+w_b = half_width(by)
+okb = np.abs(bx - CX) < w_b * 0.98
+bx, by, w_b = bx[okb], by[okb], w_b[okb]
+ub = (bx - CX) / w_b
+bz = (-88 * np.sqrt(np.clip(1 - ub ** 2, 0, 1)) * np.clip((330 - by) / 60, 0.2, 1)
+      * np.where(by < 165, np.sqrt(np.clip(1 - ((165 - by) / 118) ** 2, 0, 1)), 1))
+bn = np.stack([ub, np.zeros_like(ub), -np.sqrt(np.clip(1 - ub ** 2, 0, 1))], axis=1)
+bn /= np.linalg.norm(bn, axis=1, keepdims=True)
+keep_b = rng.uniform(0, 1, bx.shape) < 0.45
+bx, by, bz, bn = bx[keep_b], by[keep_b], bz[keep_b], bn[keep_b]
+
+P = np.concatenate([np.stack([fx, fy, fz], 1), np.stack([bx, by, bz], 1)])
+N = np.concatenate([fn, bn])
+shell = np.concatenate([np.ones(len(fx)), np.full(len(bx), 0.35)])
+
+# ligações: 3 vizinhos mais próximos em 3D (em blocos para não estourar memória)
+links3 = set()
+for s0 in range(0, len(P), 400):
+    block = P[s0:s0 + 400]
+    d = ((block[:, None, :] - P[None, :, :]) ** 2).sum(-1)
+    for k in range(len(block)):
+        i = s0 + k
+        d[k, i] = np.inf
+        for j in np.argpartition(d[k], 3)[:3]:
+            if d[k, j] <= 9.0 ** 2:
+                links3.add((min(i, int(j)), max(i, int(j))))
+
+
+def to_scene(px, py, pz):
+    """Coordenadas do desenho → unidades da cena (y para cima, centro entre os olhos)."""
+    return (px - CX) / 100, (205 - py) / 100, pz / 100
+
+
+sx_, sy_, sz_ = to_scene(P[:, 0], P[:, 1], P[:, 2])
+mesh = {
+    'points': [round(v, 4) for v in np.stack([sx_, sy_, sz_], 1).ravel().tolist()],
+    'normals': [round(v, 3) for v in N.ravel().tolist()],
+    'shell': [round(v, 2) for v in shell.tolist()],
+    'links': [i for pair in sorted(links3) for i in pair],
+    'eyes': [list(map(lambda v: round(float(v), 4), to_scene(ex, 206.0, depth(np.array(ex), np.array(206.0)) + 3)))
+             for ex in (160.0, 240.0)],
+    'mouth': list(map(lambda v: round(float(v), 4), to_scene(200.0, 301.0, depth(np.array(200.0), np.array(301.0)) + 1))),
+}
+mesh_path = os.path.join(OUT, 'face-mesh.json')
+with open(mesh_path, 'w', encoding='utf-8') as fh:
+    json.dump(mesh, fh, separators=(',', ':'))
+print(f'face-mesh.json: {os.path.getsize(mesh_path) / 1024:.1f} KB — {len(P)} pontos 3D, {len(links3)} ligações')

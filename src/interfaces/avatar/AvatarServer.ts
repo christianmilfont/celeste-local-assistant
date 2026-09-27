@@ -16,7 +16,20 @@ const CONTENT_TYPES: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.svg': 'image/svg+xml',
+  '.json': 'application/json; charset=utf-8',
 };
+
+/** Pasta raiz do pacote "three" (servido localmente em /vendor/three/, sem CDN). */
+function threeRoot(): string | undefined {
+  try {
+    return path.resolve(path.dirname(require.resolve('three')), '..');
+  } catch {
+    return undefined;
+  }
+}
+
+/** Do pacote three só são expostos o build e os addons (examples/jsm). */
+const THREE_ALLOWED = [`build${path.sep}`, `examples${path.sep}jsm${path.sep}`];
 
 const HEARTBEAT_MS = 25000;
 
@@ -30,6 +43,7 @@ export class AvatarServer {
   private clients = new Set<http.ServerResponse>();
   private heartbeat?: NodeJS.Timeout;
   private lastChange: Record<string, unknown>;
+  private threeDir = threeRoot();
 
   constructor(
     private source: AvatarStateSource,
@@ -118,11 +132,25 @@ export class AvatarServer {
   }
 
   private serveStatic(pathname: string, res: http.ServerResponse): void {
-    const relative = pathname === '/' ? 'index.html' : decodeURIComponent(pathname).replace(/^\/+/, '');
-    const file = path.resolve(this.publicDir, relative);
+    const decoded = decodeURIComponent(pathname);
+    let file: string | undefined;
 
-    // Impede acesso fora da pasta do avatar (ex.: /../.env).
-    if (!file.startsWith(this.publicDir + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+    if (decoded.startsWith('/vendor/three/')) {
+      if (this.threeDir) {
+        const candidate = path.resolve(this.threeDir, decoded.slice('/vendor/three/'.length));
+        const inside = candidate.startsWith(this.threeDir + path.sep);
+        const allowed = inside && THREE_ALLOWED.some((dir) => candidate.startsWith(path.join(this.threeDir!, dir)));
+        file = allowed ? candidate : undefined;
+      }
+    } else {
+      // Pastas (ex.: /variants/pointcloud/) abrem o index.html.
+      const relative = decoded.endsWith('/') ? `${decoded}index.html` : decoded;
+      const candidate = path.resolve(this.publicDir, relative.replace(/^\/+/, ''));
+      // Impede acesso fora da pasta do avatar (ex.: /../.env).
+      file = candidate.startsWith(this.publicDir + path.sep) ? candidate : undefined;
+    }
+
+    if (!file || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
       res.writeHead(404, { 'Content-Type': 'text/plain' }).end('Not found');
       return;
     }

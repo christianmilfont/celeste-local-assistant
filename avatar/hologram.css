@@ -1,0 +1,92 @@
+/* Celeste — holograma WebGL: só a interface (HUD e legenda) sobre o canvas. */
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #000;
+  color: #bfe3f2;
+  overflow: hidden;
+  user-select: none;
+}
+
+.stage { position: fixed; inset: 0; }
+.stage canvas { display: block; width: 100%; height: 100%; }
+
+body { --accent: #4fcfff; }
+body[data-state="LISTENING"] { --accent: #7fe8ff; }
+body[data-state="THINKING"] { --accent: #7f9cff; }
+body[data-state="ERROR"] { --accent: #ff5468; }
+body[data-connected="false"] { --accent: #3d5566; }
+
+/* HUD tech/monoespaçado com leve cintilação (só opacity: não custa GPU relevante). */
+.hud {
+  position: fixed;
+  left: 5%;
+  top: 3.5%;
+  pointer-events: none;
+  font-family: "Cascadia Mono", Consolas, "SFMono-Regular", Menlo, monospace;
+  text-shadow: 0 0 6px color-mix(in srgb, var(--accent) 60%, transparent);
+  animation: flicker 7s linear infinite;
+}
+
+@keyframes flicker {
+  0%, 18%, 22%, 60%, 64%, 100% { opacity: .9; }
+  19% { opacity: .45; }
+  20% { opacity: .8; }
+  21% { opacity: .55; }
+  62% { opacity: .7; }
+}
+
+.name {
+  font-size: clamp(10px, 1.9vh, 15px);
+  letter-spacing: .5em;
+}
+
+.status {
+  margin-top: .6em;
+  font-size: clamp(8px, 1.4vh, 11px);
+  letter-spacing: .28em;
+  color: rgba(191, 227, 242, .6);
+  display: flex;
+  align-items: center;
+  gap: .6em;
+}
+
+.status .dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  transition: background .4s ease;
+}
+
+.caption {
+  position: fixed;
+  left: 8%;
+  right: 8%;
+  bottom: 3%;
+  margin: 0;
+  min-height: 2.8em;
+  text-align: center;
+  font-family: "Cascadia Mono", Consolas, "SFMono-Regular", Menlo, monospace;
+  font-size: clamp(10px, 1.8vh, 14px);
+  line-height: 1.5;
+  color: #d7f2ff;
+  text-shadow: 0 0 8px color-mix(in srgb, var(--accent) 70%, transparent);
+  opacity: 0;
+  transition: opacity .4s ease;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+body.show-caption .caption { opacity: .85; }
+body.no-hud .hud,
+body.no-captions .caption { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .hud { animation: none; }
+}

@@ -51,6 +51,27 @@ describe('AvatarServer', () => {
     expect(script.type).toContain('javascript');
   });
 
+  it('serves three.js locally (build and addons only)', async () => {
+    const three = await get(`${baseUrl}vendor/three/build/three.module.js`);
+    expect(three.status).toBe(200);
+    expect(three.type).toContain('javascript');
+    expect((await get(`${baseUrl}vendor/three/examples/jsm/postprocessing/EffectComposer.js`)).status).toBe(200);
+    expect((await get(`${baseUrl}vendor/three/package.json`)).status).toBe(404);
+    expect((await get(`${baseUrl}vendor/three/..%2F..%2Fpackage.json`)).status).toBe(404);
+  });
+
+  it('serves the hologram page, its mesh and the SVG fallback', async () => {
+    const page = await get(baseUrl);
+    expect(page.body).toContain('hologram.js');
+    expect(page.body).toContain('importmap');
+    const mesh = await get(`${baseUrl}assets/face-mesh.json`);
+    expect(mesh.status).toBe(200);
+    expect(JSON.parse(mesh.body).points.length).toBeGreaterThan(3000);
+    const fallback = await get(`${baseUrl}variants/pointcloud/`);
+    expect(fallback.status).toBe(200);
+    expect(fallback.body).toContain('avatar.js');
+  });
+
   it('does not serve files outside the avatar folder', async () => {
     expect((await get(`${baseUrl}..%2Fpackage.json`)).status).toBe(404);
     expect((await get(`${baseUrl}../.env`)).status).toBe(404);

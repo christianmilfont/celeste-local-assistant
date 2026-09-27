@@ -47,6 +47,8 @@ export function openAvatarWindow(url: string, options: AvatarWindowOptions): Chi
     '--disable-background-networking',
     '--disable-sync',
     '--disable-features=Translate,msEdgeSidebarV2,msUndersideButton',
+    // Em notebooks com duas GPUs, usa a dedicada (ex.: GTX 1050 Ti) para o holograma WebGL.
+    '--force_high_performance_gpu',
     ...(options.fullscreen ? ['--kiosk'] : []),
   ];
 
