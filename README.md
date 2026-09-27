@@ -25,27 +25,59 @@ celeste-local-assistant/
 │   │   └── types/                # Tipos e interfaces
 │   │
 │   ├── application/              # Lógica de negócio
-│   │   ├── MessageService.ts     # Gerenciamento de mensagens
-│   │   ├── VoiceService.ts       # Serviço de voz (STT/TTS)
-│   │   ├── ResponseService.ts   # Geração de respostas
-│   │   └── ConversationService.ts
+│   │   ├── CommandProcessor.ts   # Processamento único de comandos (CLI e voz)
+│   │   ├── IntentClassifier.ts   # Texto -> intenção (regras + fallback no LLM)
+│   │   ├── ConfirmationService.ts# "sim/pode/manda" x "não/cancela/deixa"
+│   │   ├── SpeechInputService.ts # Microfone -> validação do áudio -> STT
+│   │   ├── VoicePipeline.ts      # Máquina de estados do push-to-talk
+│   │   ├── MessageService.ts     # Mensagens recebidas, não lidas, foco, envio
+│   │   ├── VoiceService.ts       # Saída de voz (TTS) e anúncios
+│   │   ├── ResponseService.ts    # Redação da resposta e confirmação
+│   │   └── nlu/                  # Normalização de texto e formatação da fala
 │   │
 │   ├── adapters/                 # Implementações de provedores
 │   │   ├── whatsapp/
 │   │   │   └── BaileysWhatsAppAdapter.ts
 │   │   ├── ai/
 │   │   │   └── OllamaProvider.ts
+│   │   ├── audio/                # Captura do microfone
+│   │   │   ├── WindowsMciRecorder.ts  # Windows (winmm/MCI, nativo)
+│   │   │   └── SoxRecorder.ts         # Linux/macOS (sox)
 │   │   ├── stt/
-│   │   │   └── WhisperProvider.ts
+│   │   │   └── WhisperProvider.ts     # faster-whisper (worker Python persistente)
 │   │   └── tts/
-│   │       └── PiperTTSProvider.ts
+│   │       └── PiperTTSProvider.ts    # Windows: System.Speech; Linux/macOS: Piper
+│   │
+│   ├── interfaces/cli/
+│   │   └── TerminalInterface.ts  # Terminal: comandos digitados + push-to-talk
 │   │
 │   ├── infrastructure/           # Infraestrutura
 │   │   ├── config/               # Configuração
 │   │   ├── logging/              # Logging
 │   │   └── storage/              # Banco de dados
 │   │
-│   └── index.ts                  # Ponto de entrada CLI
+│   └── index.ts                  # Ponto de entrada (composição)
+├── scripts/stt/whisper_worker.py # Worker do Whisper
+└── tests/                        # Testes unitários (sem hardware/serviços externos)
+```
+
+### Fluxo de voz
+
+O CLI e a voz convergem para o mesmo `CommandProcessor`, sem lógica duplicada:
+
+```
+ Teclado ──────────────────────────────┐
+                                       ▼
+ Microfone ─► Whisper (STT) ─► texto ─► CommandProcessor ─► serviços ─► resposta ─► TTS
+                                       (IntentClassifier: regras → LLM só se preciso)
+```
+
+Estados do push-to-talk (`VoicePipeline`):
+
+```
+IDLE → WAITING_FOR_VOICE → RECORDING → PROCESSING_AUDIO → TRANSCRIBING
+     → COMMAND_PROCESSING → ACTION → TTS_RESPONSE → IDLE
+Erro: ERROR → (Celeste fala o problema) → IDLE      Ctrl+C: qualquer estado → IDLE
 ```
 
 ### Componentes
@@ -63,11 +95,12 @@ celeste-local-assistant/
 - Windows, macOS ou Linux
 
 ### Dependências
-- Node.js 18+ 
+- Node.js 18+
 - npm ou yarn
 - Ollama (para IA local)
-- Whisper (para reconhecimento de voz)
-- Piper TTS (opcional, para síntese de voz)
+- Python 3.9+ com `faster-whisper` (reconhecimento de voz local)
+- Microfone (Windows: nenhuma ferramenta extra; Linux/macOS: `sox`)
+- Piper TTS (apenas Linux/macOS; no Windows é usada a voz nativa)
 
 ## Instalação
 
@@ -117,48 +150,56 @@ curl -fsSL https://ollama.com/install.sh | sh
 ollama serve
 ```
 
-2. Baixe um modelo (recomendado: llama3.2):
+2. Baixe um modelo (ex.: llama3.1:8b):
 ```bash
-ollama pull llama3.2
+ollama pull llama3.1:8b
 ```
 
-3. Configure no `.env`:
+3. Configure no `.env` com o **nome exato** de um modelo instalado (`ollama list`):
 ```
 OLLAMA_HOST=http://localhost:11434
-OLLAMA_MODEL=llama3.2
+OLLAMA_MODEL=llama3.1:8b
 ```
+
+Se o modelo configurado não estiver instalado, a IA aparece como `OFFLINE`.
+Na inicialização a Celeste pré-carrega o modelo em segundo plano (o primeiro carregamento
+de um modelo 8B pode levar mais de um minuto) e o mantém carregado por `OLLAMA_KEEP_ALIVE`.
 
 ## Instalação e Configuração do Whisper
 
-Whisper é usado para reconhecimento de voz (Speech-to-Text).
+Whisper é usado para reconhecimento de voz (Speech-to-Text), 100% local, via
+[faster-whisper](https://github.com/SYSTRAN/faster-whisper). Não precisa de ffmpeg.
 
-### Instalação
+### Instalação (venv do projeto)
 
-**Pré-requisitos:**
-- Python 3.8+
-- pip
-
+**Windows:**
 ```bash
-pip install openai-whisper
+py -3.12 -m venv .venv
+.venv\Scripts\python -m pip install faster-whisper
 ```
 
-**Alternativa (via ffmpeg):**
+**Linux/macOS:**
 ```bash
-# Instale ffmpeg primeiro
-# Windows: chocolatey install ffmpeg
-# macOS: brew install ffmpeg
-# Linux: sudo apt install ffmpeg
+python3 -m venv .venv
+.venv/bin/python -m pip install faster-whisper
 ```
+
+A Celeste usa automaticamente o Python de `.venv/` (ou `WHISPER_PYTHON`, se definido).
+Na primeira execução o modelo (~145 MB para `base`) é baixado do Hugging Face e fica em cache.
+
+O Whisper roda como um **worker persistente** (`scripts/stt/whisper_worker.py`): o modelo é
+carregado uma vez na inicialização e reutilizado em todos os comandos.
 
 ### Configuração
 
-Configure no `.env`:
 ```
-WHISPER_MODEL=base
+WHISPER_MODEL=base          # tiny | base | small | medium (maior = mais preciso e mais lento)
 WHISPER_LANGUAGE=pt
+WHISPER_DEVICE=cpu          # cuda exige CUDA/cuDNN instalados
+WHISPER_COMPUTE_TYPE=int8
 ```
 
-**Nota:** Para o MVP, o Whisper é um placeholder. Você precisará configurar uma solução real de gravação de áudio para STT funcionar completamente.
+Se o reconhecimento errar muito com o seu microfone, experimente `WHISPER_MODEL=small`.
 
 ## Instalação e Configuração do Piper TTS
 
@@ -188,7 +229,15 @@ PIPER_MODEL=pt_BR-glow_tts
 PIPER_VOICE_PATH=
 ```
 
-**Nota:** No Windows, o sistema usa a síntese de voz nativa do PowerShell como fallback.
+**Nota:** No Windows, o sistema usa a síntese de voz nativa (System.Speech) e escolhe
+automaticamente uma voz pt-BR instalada (ex.: "Microsoft Maria Desktop"). Para escolher outra:
+`TTS_VOICE=Microsoft Maria Desktop` e `TTS_RATE=0` (-10 a 10).
+
+## Microfone
+
+- **Windows:** gravação nativa via `winmm.dll` (MCI), sem instalar nada. Se nada for captado,
+  verifique *Configurações > Privacidade > Microfone* e o dispositivo de entrada padrão.
+- **Linux/macOS:** instale o SoX (`sudo apt install sox` / `brew install sox`).
 
 ## Configuração do WhatsApp
 
@@ -224,21 +273,81 @@ npm run build
 npm start
 ```
 
-### Comandos da CLI
+### Serviços que precisam estar rodando
 
-Após iniciar, você terá acesso aos seguintes comandos:
+- **Ollama** (`ollama serve`) com o modelo do `.env` instalado — opcional: sem ele os comandos
+  simples continuam funcionando, mas frases livres não são interpretadas e as respostas são
+  enviadas exatamente como ditadas.
+- **WhatsApp** pareado (QR Code na primeira execução).
+- Whisper, TTS e microfone são iniciados pela própria Celeste.
 
-- `/status` - Mostra o status atual dos serviços
-- `/voice` - Inicia captura de voz (placeholder no MVP)
+### Interação por voz (push-to-talk)
+
+```
+╔══════════════════════════════════════╗
+║       CELESTE LOCAL ASSISTANT        ║
+╚══════════════════════════════════════╝
+
+WhatsApp: CONNECTED
+AI:       ONLINE
+STT:      ONLINE
+TTS:      ONLINE
+MIC:      ONLINE
+────────────────────────────────────────
+
+🎙️  Pressione ENTER para falar
+```
+
+1. Pressione **ENTER** → `🎙️ Ouvindo...`
+2. Fale o comando (ex.: *"Celeste, status."*)
+3. Pressione **ENTER** de novo → `🧠 Processando...` → `📝 Você disse:` → `🔊 Celeste:`
+4. **Ctrl+C** cancela a gravação/processamento/fala e volta ao início (em repouso, Ctrl+C duas vezes sai)
+
+A gravação para sozinha após `VOICE_MAX_RECORDING_MS` (30 s). Você também pode **digitar**
+qualquer comando — ele é processado exatamente da mesma forma.
+
+### O que dizer
+
+Não é preciso falar comandos rígidos; "Celeste," no início é opcional.
+
+| Intenção | Exemplos |
+|---|---|
+| STATUS | "status", "como está o sistema?", "como estão os serviços?", "como você está?" |
+| HELP | "ajuda", "o que você consegue fazer?" |
+| LIST_MESSAGES | "quais mensagens eu recebi?", "tenho mensagens novas?" |
+| READ_LAST_MESSAGE | "leia a última mensagem", "leia novamente", "o que o João disse?" |
+| REPLY_TO_MESSAGE | "responde que já vou verificar", "responde para o João dizendo que já estou chegando" |
+| CONFIRM | "sim", "pode", "pode enviar", "manda" |
+| DENY / CANCEL | "não", "cancela", "deixa", "esquece" |
+| REPEAT | "repete", "não entendi" |
+| STOP | "desligar", "encerrar" |
+
+Comandos comuns são resolvidos por regras locais (instantâneo, sem LLM). Frases que não casam
+com nenhuma regra são interpretadas pelo Ollama.
+
+### Fluxo com o WhatsApp
+
+1. Chega uma mensagem → a Celeste anuncia: *"Você recebeu uma mensagem de João: ..."*
+2. *"Responde dizendo que já vou verificar."* → a Celeste usa a mensagem em foco (não pergunta "para quem?")
+3. *"Preparei esta resposta para João: 'Já vou verificar.' Posso enviar?"*
+4. *"Pode."* → envia. *"Não"* / *"cancela"* → descarta.
+
+**Segurança:** nada é enviado sem um "sim" inequívoco. Respostas ambíguas ("sim, mas muda o
+horário", frases longas) nunca confirmam — a Celeste pergunta de novo. O LLM nunca decide a confirmação.
+
+Mensagens que chegam enquanto você fala são anunciadas ao final da interação.
+
+### Comandos do terminal
+
+- `ENTER` / `/voice` - Começa/termina a gravação
+- `/status` - Verifica e mostra o status dos serviços
 - `/help` - Mostra ajuda
-- `/stop` - Para o Celeste
+- `/stop` - Encerra a Celeste
 
-### Fluxo de Uso
+### Logs
 
-1. **Receber mensagem**: Celeste anuncia a mensagem por voz
-2. **Responder**: Digite seu comando de resposta no terminal (ou use `/voice` quando STT estiver configurado)
-3. **Confirmação**: Celeste pede confirmação antes de enviar
-4. **Envio**: Confirme com "sim", "pode", "envia" ou cancele com "não", "cancelar"
+O terminal mostra apenas avisos e erros (`LOG_CONSOLE_LEVEL=warn`) para não poluir a interface.
+O log completo fica em `./logs/celeste.log` (`LOG_LEVEL`).
 
 ## Troubleshooting
 
@@ -256,9 +365,20 @@ Após iniciar, você terá acesso aos seguintes comandos:
 - No Windows, o sistema usa voz nativa do PowerShell
 - Em macOS/Linux, verifique se Piper está instalado corretamente
 
-**STT não funciona:**
-- No MVP, STT é um placeholder
-- Configure Whisper e ferramentas de gravação de áudio para uso real
+**STT OFFLINE / "O reconhecimento de voz está indisponível":**
+- Instale o faster-whisper no `.venv` (veja "Instalação e Configuração do Whisper")
+- Ou aponte `WHISPER_PYTHON` para um Python que tenha o `faster-whisper`
+
+**"Não captei nenhum som" / MIC OFFLINE:**
+- Windows: *Configurações > Privacidade > Microfone* → permitir apps da área de trabalho
+- Verifique o dispositivo de entrada padrão e se o microfone não está mudo
+
+**"Não consegui entender o áudio":**
+- Fale mais perto do microfone e espere um instante após o ENTER antes de falar
+- Experimente `WHISPER_MODEL=small`
+
+**IA OFFLINE:**
+- `ollama serve` e confira se `OLLAMA_MODEL` aparece em `ollama list`
 
 **Erros de TypeScript:**
 ```bash
@@ -278,16 +398,14 @@ npm run test:watch
 ```
 
 ### Testes unitários
-O projeto inclui testes unitários para:
-- MessageService
-- Intent parser
-- Confirmation flow
-- State machine
-- AIProvider
-- MessagingAdapter
-- Tratamento de erros
+O projeto inclui testes unitários (`tests/`) para:
+- `ConfirmationService` — "sim/pode/manda" → CONFIRM; "não/cancela/deixa" → DENY/CANCEL; frases ambíguas nunca confirmam
+- `IntentClassifier` — linguagem natural → intenções, extração de destinatário/conteúdo, fallback no LLM
+- `CommandProcessor` — "status", "Celeste, status", "como está o sistema?" → STATUS; contexto da conversa; confirmação; erros
+- `SpeechInputService` — iniciar/finalizar gravação, áudio vazio/silencioso, transcrição vazia, erros de STT
+- `VoicePipeline` — fluxo completo com Microfone, Whisper, Ollama, TTS e WhatsApp simulados
 
-**Nota:** Os testes usam mocks e não dependem de uma conta real do WhatsApp.
+**Nota:** Os testes usam fakes e não dependem de hardware de áudio, Ollama, Whisper nem de uma conta real do WhatsApp.
 
 ## Segurança
 
@@ -332,15 +450,22 @@ Se você implementar provedores alternativos nas fases futuras:
 
 ## Roadmap
 
-### Fase 1 (Atual) - MVP ✅
+### Fase 1 - MVP ✅
 - ✅ Integração com WhatsApp via Baileys
 - ✅ Text-to-Speech básico
-- ✅ Speech-to-Text placeholder
 - ✅ Ollama para IA
 - ✅ Confirmação antes de enviar
 - ✅ CLI básica
 - ✅ Logging estruturado
 - ✅ SQLite para armazenamento
+
+### Fase 1.5 (Atual) - Interação por voz ✅
+- ✅ Push-to-talk no terminal (ENTER para falar)
+- ✅ Speech-to-Text local com Whisper (faster-whisper)
+- ✅ Command Processor único para CLI e voz
+- ✅ Intenções em linguagem natural (regras + LLM)
+- ✅ Contexto da conversa (responder sem repetir o destinatário)
+- ✅ Respostas faladas e tratamento de erros por voz
 
 ### Fase 2 - Wake Word e Escuta Contínua
 - Wake word "Celeste"

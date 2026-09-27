@@ -7,7 +7,7 @@ Before testing the MVP, ensure you have:
 1. **Ollama installed and running**
    ```bash
    ollama serve
-   ollama pull llama3.2
+   ollama pull llama3.1:8b
    ```
 
 2. **Environment file configured**
@@ -21,6 +21,8 @@ Before testing the MVP, ensure you have:
 3. **Dependencies installed**
    ```bash
    npm install
+   py -3.12 -m venv .venv
+   .venv\Scripts\python -m pip install faster-whisper
    ```
 
 ## Test Sequence
@@ -61,45 +63,37 @@ npm run dev
 - Voice announcement (if TTS is configured)
 - State transitions logged
 
-### Test 5: Voice Input (CLI Simulation)
-Since STT is a placeholder in MVP, test with text input:
-
-1. After receiving a message, type a response command:
-   ```
-   Responde que sim, vou mandar mais tarde.
-   ```
+### Test 5: Voice Input (push-to-talk)
+1. Confirm the panel shows `🎙️  Pressione ENTER para falar` and `STT: ONLINE`, `MIC: ONLINE`
+2. Press ENTER, say "Celeste, status.", press ENTER
 
 **Expected:**
-- Log: "Processing voice transcription"
-- Log: "Intent detected: REPLY_TO_MESSAGE"
-- Log: "Generating response"
-- Log: "Requesting confirmation"
-- Voice asks for confirmation
+- `🎙️ Ouvindo...` → `🧠 Processando...`
+- `📝 Você disse: "Celeste, status."`
+- `🔊 Celeste:` "Estou online. WhatsApp conectado, ..." (spoken)
 
-### Test 6: Confirmation Flow
-1. When asked for confirmation, type:
-   ```
-   Pode
-   ```
+3. Repeat with "Celeste, ajuda." → Celeste explains what she can do (spoken)
 
-**Expected:**
-- Log: "Response confirmed"
-- Log: "Sending message"
-- Message sent to WhatsApp
-- State returns to IDLE
+### Test 6: WhatsApp reply by voice
+1. From another phone, send a message → Celeste announces "Você recebeu uma mensagem de ..."
+2. Press ENTER, say "Leia novamente." → Celeste repeats the message
+3. Press ENTER, say "Responde dizendo que já vou verificar." → "Preparei esta resposta para ...: '...'. Posso enviar?"
+4. Press ENTER, say "Pode enviar." → "Mensagem enviada para ..." and the message arrives on the other phone
 
 ### Test 7: Cancellation
-1. After receiving a message, type a response
-2. When asked for confirmation, type:
-   ```
-   Não
-   ```
+1. Repeat Test 6 but answer "Não" (or "cancela")
 
 **Expected:**
-- Log: "Response cancelled"
-- Log: "Cancelado." (voice)
-- State returns to IDLE
-- No message sent
+- "Tudo bem, não vou enviar a mensagem."
+- No message sent, state returns to IDLE
+
+### Test 7b: Typed commands (same processing as voice)
+Type `como estão os serviços?` → same answer as the spoken "status".
+
+### Test 7c: Interruption and errors
+- Press ENTER then Ctrl+C → `⏹️  Cancelado.`, back to `Pressione ENTER para falar`
+- Press ENTER and stay silent, then ENTER → "Não captei nenhum som..." or "Não consegui entender o áudio. Pode repetir?"
+- Stop Ollama and say something unusual → "... A inteligência artificial está indisponível no momento ..."
 
 ### Test 8: Status Command
 Type `/status` in the CLI
@@ -115,7 +109,7 @@ Type `/help` in the CLI
 - List of available commands displayed
 
 ### Test 10: Graceful Shutdown
-Type `/stop` or press Ctrl+C
+Type `/stop`, say "desligar", or press Ctrl+C twice
 
 **Expected:**
 - Log: "Stopping Celeste..."
@@ -124,10 +118,9 @@ Type `/stop` or press Ctrl+C
 
 ## Known Limitations in MVP
 
-1. **STT is placeholder**: Voice input is simulated with text input
-2. **Audio recording**: Actual microphone recording not implemented
-3. **Wake word**: Not implemented (use CLI commands)
-4. **Continuous listening**: Not implemented (manual trigger only)
+1. **Wake word**: Not implemented (push-to-talk with ENTER)
+2. **Continuous listening**: Not implemented (manual trigger only)
+3. **Message context**: only messages received while Celeste is running can be read/replied to
 
 ## Troubleshooting Tests
 
@@ -162,6 +155,8 @@ npm run build
 - [ ] WhatsApp connects after scanning
 - [ ] Messages are received and logged
 - [ ] Messages are announced (voice)
+- [ ] Push-to-talk: ENTER → speak → ENTER shows the transcription
+- [ ] Spoken commands are answered by voice
 - [ ] Response commands are processed
 - [ ] Confirmation flow works
 - [ ] Cancellation works
@@ -185,9 +180,7 @@ The MVP is considered successful when:
 
 Once the MVP passes all tests:
 
-1. Implement actual STT with Whisper
-2. Add audio recording functionality
-3. Implement wake word detection
-4. Add continuous listening
-5. Implement memory/context
-6. Add GUI (web dashboard)
+1. Implement wake word detection
+2. Add continuous listening
+3. Implement memory/context
+4. Add GUI (web dashboard)

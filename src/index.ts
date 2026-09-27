@@ -1,115 +1,74 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { Celeste } from './core/Celeste';
 import { BaileysWhatsAppAdapter } from './adapters/whatsapp/BaileysWhatsAppAdapter';
 import { OllamaProvider } from './adapters/ai/OllamaProvider';
 import { WhisperProvider } from './adapters/stt/WhisperProvider';
 import { PiperTTSProvider } from './adapters/tts/PiperTTSProvider';
+import { createAudioRecorder } from './adapters/audio';
+import { TerminalInterface } from './interfaces/cli/TerminalInterface';
+import { Config } from './infrastructure/config/Config';
 import { Logger } from './infrastructure/logging/Logger';
-import * as readline from 'readline';
-
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout,
-});
 
 async function main() {
+  let celeste: Celeste | undefined;
   try {
-    Logger.info('╔════════════════════════════════════╗');
-    Logger.info('║      CELESTE LOCAL ASSISTANT       ║');
-    Logger.info('╚════════════════════════════════════╝');
+    console.log('Iniciando a Celeste...');
 
     const messagingAdapter = new BaileysWhatsAppAdapter();
     const aiProvider = new OllamaProvider();
     const sttProvider = new WhisperProvider();
     const ttsProvider = new PiperTTSProvider();
+    const audioRecorder = createAudioRecorder();
 
-    const celeste = new Celeste(
+    celeste = new Celeste(
       messagingAdapter,
       aiProvider,
       sttProvider,
-      ttsProvider
+      ttsProvider,
+      audioRecorder
     );
+
+    // Garante que gravador/Whisper/TTS não fiquem órfãos se o processo terminar.
+    const instance = celeste;
+    process.on('exit', () => instance.dispose());
 
     await celeste.start();
 
-    displayStatus(celeste);
-    displayHelp();
+    await waitForWhatsApp(() => messagingAdapter.isConnected());
 
-    setupCLI(celeste);
+    new TerminalInterface(celeste).start();
   } catch (error) {
     Logger.error('Failed to start Celeste', error);
+    celeste?.dispose();
     process.exit(1);
   }
 }
 
-function displayStatus(celeste: Celeste): void {
-  const status = celeste.getStatus();
-  console.log('\nStatus:');
-  console.log(`  WhatsApp: ${status.whatsapp ? 'CONNECTED' : 'DISCONNECTED'}`);
-  console.log(`  AI:       ${status.ai ? 'ONLINE' : 'OFFLINE'}`);
-  console.log(`  STT:      ${status.stt ? 'ONLINE' : 'OFFLINE'}`);
-  console.log(`  TTS:      ${status.tts ? 'ONLINE' : 'OFFLINE'}`);
-  console.log(`  State:    ${status.state}`);
-  console.log('\n');
+/** Aguarda a conexão (ou a leitura do QR Code na primeira execução) antes de exibir o painel. */
+async function waitForWhatsApp(isConnected: () => boolean): Promise<void> {
+  const hasSession = isWhatsAppPaired();
+  const timeoutMs = hasSession ? 15000 : Config.whatsappAuthTimeout;
+  if (!hasSession) {
+    console.log('Aguardando conexão com o WhatsApp (escaneie o QR Code se ele aparecer)...');
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (!isConnected() && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
 }
 
-function displayHelp(): void {
-  console.log('Commands:');
-  console.log('  /status   - Show current status');
-  console.log('  /voice    - Start voice input');
-  console.log('  /help     - Show this help');
-  console.log('  /stop     - Stop Celeste');
-  console.log('\nListening...\n');
+/** A sessão só está pareada depois que o QR Code foi escaneado (creds.me preenchido). */
+function isWhatsAppPaired(): boolean {
+  try {
+    const creds = JSON.parse(
+      fs.readFileSync(path.join(Config.whatsappSessionPath, 'creds.json'), 'utf-8')
+    );
+    return Boolean(creds?.me?.id);
+  } catch {
+    return false;
+  }
 }
-
-function setupCLI(celeste: Celeste): void {
-  rl.on('line', async (input) => {
-    const command = input.trim();
-
-    if (command === '/status') {
-      displayStatus(celeste);
-    } else if (command === '/voice') {
-      try {
-        await celeste.startVoiceInput();
-        Logger.info('Voice input completed');
-      } catch (error) {
-        Logger.error('Voice input failed', error);
-      }
-    } else if (command === '/help') {
-      displayHelp();
-    } else if (command === '/stop') {
-      await celeste.stop();
-      Logger.info('Celeste stopped. Goodbye!');
-      rl.close();
-      process.exit(0);
-    } else if (command.startsWith('/')) {
-      console.log('Unknown command. Type /help for available commands.');
-    } else {
-      try {
-        await celeste.processVoiceTranscription(command);
-      } catch (error) {
-        Logger.error('Error processing input', error);
-      }
-    }
-
-    displayPrompt();
-  });
-
-  rl.on('close', async () => {
-    await celeste.stop();
-    process.exit(0);
-  });
-
-  displayPrompt();
-}
-
-function displayPrompt(): void {
-  process.stdout.write('> ');
-}
-
-process.on('SIGINT', async () => {
-  Logger.info('Received SIGINT, shutting down...');
-  rl.close();
-  process.exit(0);
-});
 
 main();

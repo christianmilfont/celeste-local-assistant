@@ -80,7 +80,8 @@ export class BaileysWhatsAppAdapter implements MessagingAdapter {
       this.socket.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type === 'notify') {
           for (const message of messages) {
-            if (!message.key.fromMe && message.message) {
+            const isStatusBroadcast = message.key.remoteJid === 'status@broadcast';
+            if (!message.key.fromMe && message.message && !isStatusBroadcast) {
               await this.handleIncomingMessage(message);
             }
           }
@@ -131,6 +132,11 @@ export class BaileysWhatsAppAdapter implements MessagingAdapter {
     try {
       const message = this.convertToIncomingMessage(baileysMessage);
 
+      // Reações, confirmações de leitura e mensagens de protocolo não têm texto.
+      if (!message.text) {
+        return;
+      }
+
       if (this.messageCallback) {
         await this.messageCallback(message);
       }
@@ -142,7 +148,7 @@ export class BaileysWhatsAppAdapter implements MessagingAdapter {
   private convertToIncomingMessage(baileysMessage: any): IncomingMessage {
     const key = baileysMessage.key;
     const messageContent = baileysMessage.message;
-    const text = messageContent?.conversation || messageContent?.extendedTextMessage?.text || '';
+    const text = this.extractText(messageContent);
 
     const chatId = key.remoteJid;
     const senderId = key.participant || key.remoteJid;
@@ -165,9 +171,35 @@ export class BaileysWhatsAppAdapter implements MessagingAdapter {
       senderId: senderId || '',
       senderName,
       text,
-      timestamp: new Date(baileysMessage.messageTimestamp || Date.now()),
+      // messageTimestamp vem em segundos (number ou Long).
+      timestamp: baileysMessage.messageTimestamp
+        ? new Date(Number(baileysMessage.messageTimestamp) * 1000)
+        : new Date(),
       isGroup,
       groupName,
     };
+  }
+
+  private extractText(content: any): string {
+    if (!content) {
+      return '';
+    }
+    const text =
+      content.conversation ||
+      content.extendedTextMessage?.text ||
+      content.imageMessage?.caption ||
+      content.videoMessage?.caption ||
+      content.documentMessage?.caption;
+    if (text) {
+      return text;
+    }
+    if (content.imageMessage) return '[imagem]';
+    if (content.videoMessage) return '[vídeo]';
+    if (content.audioMessage) return '[mensagem de áudio]';
+    if (content.documentMessage) return '[documento]';
+    if (content.stickerMessage) return '[figurinha]';
+    if (content.locationMessage) return '[localização]';
+    if (content.contactMessage) return '[contato]';
+    return '';
   }
 }

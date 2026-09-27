@@ -17,14 +17,40 @@ export interface AIProvider {
   ): Promise<string>;
   parseIntent(transcription: string, context?: ConversationContext): Promise<any>;
   isAvailable(): boolean;
+  /** Verifica ativamente se o provider está acessível e atualiza isAvailable(). */
+  checkAvailability?(): Promise<boolean>;
+  /** Carrega o modelo em segundo plano para o primeiro comando não esperar. */
+  warmUp?(): Promise<void>;
 }
 
 export interface SpeechToTextProvider {
   transcribe(audioPath: string): Promise<string>;
   isAvailable(): boolean;
+  checkAvailability?(): Promise<boolean>;
+  /** Pré-carrega o modelo para que o primeiro comando de voz seja rápido. */
+  warmUp?(): Promise<void>;
+  /** Libera processos/recursos (ex.: worker do Whisper). */
+  dispose?(): void;
 }
 
 export interface TextToSpeechProvider {
   speak(text: string): Promise<void>;
   isAvailable(): boolean;
+  checkAvailability?(): Promise<boolean>;
+  /** Interrompe a fala em andamento, se houver. */
+  stop?(): void;
+}
+
+/**
+ * Captura de áudio do microfone (push-to-talk).
+ * start() inicia a gravação; stop() finaliza e devolve o caminho do WAV gerado.
+ */
+export interface AudioRecorder {
+  start(): Promise<void>;
+  stop(): Promise<string>;
+  cancel(): Promise<void>;
+  isRecording(): boolean;
+  isAvailable(): boolean;
+  checkAvailability?(): Promise<boolean>;
+  dispose?(): void;
 }

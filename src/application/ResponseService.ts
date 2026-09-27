@@ -2,56 +2,19 @@ import { AIProvider } from '../core/types/adapters';
 import { EventBus } from '../core/EventBus';
 import { StateMachine } from '../core/StateMachine';
 import { Logger } from '../infrastructure/logging/Logger';
-import { IncomingMessage, MessageIntent } from '../core/types';
+import { Config } from '../infrastructure/config/Config';
+import { IncomingMessage } from '../core/types';
 import { ConversationContext } from '../core/types/adapters';
+import { ConfirmationService } from './ConfirmationService';
+import { toSentence } from './nlu/text';
 
 export class ResponseService {
   constructor(
     private aiProvider: AIProvider,
     private eventBus: EventBus,
-    private stateMachine: StateMachine
+    private stateMachine: StateMachine,
+    private confirmationService: ConfirmationService = new ConfirmationService()
   ) {}
-
-  async processVoiceInput(
-    transcription: string,
-    context?: IncomingMessage
-  ): Promise<MessageIntent> {
-    try {
-      Logger.info('Processing voice input', { transcription });
-
-      // Allow transition from ERROR state
-      const currentState = this.stateMachine.getCurrentState();
-      if (currentState === 'ERROR') {
-        this.stateMachine.transition('IDLE');
-      }
-
-      this.stateMachine.transition('GENERATING_RESPONSE');
-
-      const conversationContext: ConversationContext | undefined = context
-        ? {
-            conversationId: context.chatId,
-            recentMessages: [context],
-            currentMessage: context,
-          }
-        : undefined;
-
-      const intent = await this.aiProvider.parseIntent(
-        transcription,
-        conversationContext
-      );
-
-      Logger.info('Intent detected', { intent: intent.intent });
-
-      await this.eventBus.emit('COMMAND_DETECTED', intent);
-
-      return intent;
-    } catch (error) {
-      Logger.error('Error processing voice input', error);
-      await this.eventBus.emit('ERROR', { error });
-      this.stateMachine.transition('ERROR');
-      throw error;
-    }
-  }
 
   async generateResponse(
     userInstruction: string,
@@ -60,17 +23,9 @@ export class ResponseService {
     try {
       Logger.info('Generating response', { userInstruction });
 
-      const conversationContext: ConversationContext | undefined = context
-        ? {
-            conversationId: context.chatId,
-            recentMessages: [context],
-            currentMessage: context,
-          }
-        : undefined;
-
       const response = await this.aiProvider.generateResponse(
         userInstruction,
-        conversationContext
+        this.toConversationContext(context)
       );
 
       this.stateMachine.setPendingResponse(response);
@@ -86,19 +41,53 @@ export class ResponseService {
     }
   }
 
-  async requestConfirmation(response: string, senderName?: string): Promise<void> {
+  /**
+   * Redige o texto a ser enviado a partir do que o usuário ditou.
+   * Usa o LLM quando habilitado e disponível; caso contrário (ou em falha),
+   * usa o próprio texto ditado. Nunca envia nada: só prepara o rascunho.
+   */
+  async composeReply(dictated: string, context?: IncomingMessage): Promise<string> {
+    const literal = toSentence(dictated);
+
+    if (!Config.aiRewriteReplies || !this.aiProvider.isAvailable()) {
+      return literal;
+    }
+
+    try {
+      const generated = await this.aiProvider.generateResponse(
+        dictated,
+        this.toConversationContext(context)
+      );
+      const cleaned = this.sanitizeGenerated(generated);
+
+      // Resposta vazia ou longa demais indica que o modelo fugiu da instrução.
+      if (!cleaned || cleaned.length > Math.max(200, dictated.length * 4)) {
+        Logger.warn('Discarding AI reply, using dictated text', { generated });
+        return literal;
+      }
+      return cleaned;
+    } catch (error) {
+      Logger.warn('AI reply generation failed, using dictated text', { error: String(error) });
+      return literal;
+    }
+  }
+
+  async requestConfirmation(response: string, senderName?: string): Promise<string> {
     const confirmationText = senderName
-      ? `Vou responder ao ${senderName}: ${response}. Posso enviar?`
-      : `Vou responder: ${response}. Posso enviar?`;
+      ? `Preparei esta resposta para ${senderName}: "${response}". Posso enviar?`
+      : `Preparei esta resposta: "${response}". Posso enviar?`;
 
     Logger.info('Requesting confirmation');
 
+    this.stateMachine.setPendingResponse(response);
     this.stateMachine.transition('WAITING_CONFIRMATION');
 
     await this.eventBus.emit('RESPONSE_CONFIRMATION_REQUIRED', {
       response,
       confirmationText,
     });
+
+    return confirmationText;
   }
 
   async handleConfirmation(
@@ -128,31 +117,28 @@ export class ResponseService {
   }
 
   isConfirmationCommand(text: string): boolean {
-    const positiveCommands = ['pode', 'sim', 'envia', 'enviar', 'ok', 'confirmar'];
-    const negativeCommands = ['não', 'cancelar', 'espera', 'parar', 'negar'];
-
-    const lowerText = text.toLowerCase().trim();
-
-    return (
-      positiveCommands.some((cmd) => lowerText.includes(cmd)) ||
-      negativeCommands.some((cmd) => lowerText.includes(cmd))
-    );
+    return this.confirmationService.parse(text) !== 'UNKNOWN';
   }
 
   parseConfirmation(text: string): boolean {
-    const positiveCommands = ['pode', 'sim', 'envia', 'enviar', 'ok', 'confirmar'];
-    const negativeCommands = ['não', 'cancelar', 'espera', 'parar', 'negar'];
+    return this.confirmationService.parse(text) === 'CONFIRM';
+  }
 
-    const lowerText = text.toLowerCase().trim();
+  private sanitizeGenerated(text: string): string {
+    const firstParagraph = text.trim().split(/\n\s*\n/)[0];
+    return firstParagraph
+      .replace(/^(?:resposta|mensagem|mensagem a enviar|texto)\s*:\s*/i, '')
+      .replace(/^["'“]+|["'”]+$/g, '')
+      .trim();
+  }
 
-    if (positiveCommands.some((cmd) => lowerText.includes(cmd))) {
-      return true;
-    }
-
-    if (negativeCommands.some((cmd) => lowerText.includes(cmd))) {
-      return false;
-    }
-
-    return false;
+  private toConversationContext(context?: IncomingMessage): ConversationContext | undefined {
+    return context
+      ? {
+          conversationId: context.chatId,
+          recentMessages: [context],
+          currentMessage: context,
+        }
+      : undefined;
   }
 }

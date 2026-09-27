@@ -3,13 +3,38 @@ import { StateMachine } from './StateMachine';
 import { MessageService } from '../application/MessageService';
 import { VoiceService } from '../application/VoiceService';
 import { ResponseService } from '../application/ResponseService';
-import { MessagingAdapter } from './types/adapters';
-import { AIProvider } from './types/adapters';
-import { SpeechToTextProvider } from './types/adapters';
-import { TextToSpeechProvider } from './types/adapters';
+import { ConfirmationService } from '../application/ConfirmationService';
+import { IntentClassifier } from '../application/IntentClassifier';
+import {
+  CommandProcessor,
+  CommandStageListener,
+  StatusSnapshot,
+} from '../application/CommandProcessor';
+import { SpeechInputService } from '../application/SpeechInputService';
+import { VoicePipeline, VoiceTurnResult } from '../application/VoicePipeline';
+import { describeMessage } from '../application/nlu/messageFormat';
+import {
+  AudioRecorder,
+  MessagingAdapter,
+  AIProvider,
+  SpeechToTextProvider,
+  TextToSpeechProvider,
+} from './types/adapters';
 import { CelesteDatabase } from '../infrastructure/storage/Database';
 import { Logger } from '../infrastructure/logging/Logger';
-import { IncomingMessage } from './types';
+import {
+  AssistantEvent,
+  CommandResult,
+  EventType,
+  IncomingMessage,
+  InputSource,
+  VoicePipelineState,
+} from './types';
+
+export interface CelesteStatus extends StatusSnapshot {
+  mic: boolean;
+  voice: VoicePipelineState | 'DISABLED';
+}
 
 export class Celeste {
   private eventBus: EventBus;
@@ -17,13 +42,22 @@ export class Celeste {
   private messageService: MessageService;
   private voiceService: VoiceService;
   private responseService: ResponseService;
+  private commandProcessor: CommandProcessor;
+  private speechInputService?: SpeechInputService;
+  private voicePipeline?: VoicePipeline;
   private database: CelesteDatabase;
+
+  /** Serializa comandos e anúncios para que não disputem o estado nem o alto-falante. */
+  private queue: Promise<unknown> = Promise.resolve();
+  /** Mensagens que chegaram enquanto o usuário falava: anunciadas ao final. */
+  private deferredAnnouncements: IncomingMessage[] = [];
 
   constructor(
     private messagingAdapter: MessagingAdapter,
     private aiProvider: AIProvider,
     private sttProvider: SpeechToTextProvider,
-    private ttsProvider: TextToSpeechProvider
+    private ttsProvider: TextToSpeechProvider,
+    private audioRecorder?: AudioRecorder
   ) {
     this.eventBus = new EventBus();
     this.stateMachine = new StateMachine();
@@ -36,18 +70,33 @@ export class Celeste {
       this.database
     );
 
-    this.voiceService = new VoiceService(
-      sttProvider,
-      ttsProvider,
-      this.eventBus,
-      this.stateMachine
-    );
+    this.voiceService = new VoiceService(ttsProvider, this.eventBus);
+
+    const confirmationService = new ConfirmationService();
 
     this.responseService = new ResponseService(
       aiProvider,
       this.eventBus,
-      this.stateMachine
+      this.stateMachine,
+      confirmationService
     );
+
+    this.commandProcessor = new CommandProcessor({
+      messageService: this.messageService,
+      responseService: this.responseService,
+      stateMachine: this.stateMachine,
+      eventBus: this.eventBus,
+      intentClassifier: new IntentClassifier(aiProvider, confirmationService),
+      confirmationService,
+      aiProvider,
+      getStatus: () => this.refreshStatus(),
+    });
+
+    if (audioRecorder) {
+      this.speechInputService = new SpeechInputService(audioRecorder, sttProvider, this.eventBus);
+      this.voicePipeline = new VoicePipeline(this.speechInputService, this, this.eventBus);
+      this.voicePipeline.onStateChange((state) => this.flushDeferredAnnouncements(state));
+    }
 
     this.setupEventListeners();
   }
@@ -63,6 +112,14 @@ export class Celeste {
 
       this.setupEventLogging();
 
+      await this.checkServices();
+
+      // Carrega os modelos (Whisper e LLM) em segundo plano para o primeiro comando ser rápido.
+      this.sttProvider.warmUp?.().catch((error) => {
+        Logger.warn('Whisper warm-up failed', { error: String(error) });
+      });
+      void this.aiProvider.warmUp?.();
+
       Logger.info('Celeste started successfully');
     } catch (error) {
       Logger.error('Failed to start Celeste', error);
@@ -74,6 +131,8 @@ export class Celeste {
     try {
       Logger.info('Stopping Celeste...');
 
+      await this.voicePipeline?.cancel();
+      this.dispose();
       await this.messagingAdapter.disconnect();
       this.eventBus.removeAllListeners();
 
@@ -84,118 +143,182 @@ export class Celeste {
     }
   }
 
-  private async handleIncomingMessage(message: IncomingMessage): Promise<void> {
-    await this.messageService.handleIncomingMessage(message);
-
-    const pendingMessage = this.stateMachine.getPendingMessage();
-    if (pendingMessage) {
-      await this.voiceService.announceMessage(pendingMessage);
-      this.stateMachine.transition('IDLE');
-    }
+  /** Finaliza processos filhos (microfone, Whisper, TTS). Seguro para chamar no 'exit'. */
+  dispose(): void {
+    this.voiceService.stopSpeaking();
+    this.audioRecorder?.dispose?.();
+    this.sttProvider.dispose?.();
   }
 
-  async startVoiceInput(): Promise<void> {
-    try {
-      Logger.info('Starting voice input');
-
-      const currentState = this.stateMachine.getCurrentState();
-      if (currentState !== 'IDLE') {
-        Logger.warn('Cannot start voice input in current state', {
-          currentState,
-        });
-        return;
-      }
-
-      await this.voiceService.startListening();
-    } catch (error) {
-      Logger.error('Error starting voice input', error);
-      throw error;
-    }
+  /**
+   * Entrada única de comandos: CLI e voz chegam aqui com o mesmo texto.
+   * Retorna a resposta sem falar (quem chama decide quando falar).
+   */
+  processCommand(
+    input: string,
+    source: InputSource = 'cli',
+    onStage?: CommandStageListener
+  ): Promise<CommandResult> {
+    return this.exclusive(() => this.commandProcessor.processCommand(input, source, onStage));
   }
 
+  /** Processa o comando e fala a resposta. */
+  async respond(input: string, source: InputSource = 'cli'): Promise<CommandResult> {
+    return this.exclusive(async () => {
+      const result = await this.commandProcessor.processCommand(input, source);
+      await this.speak(result.reply);
+      return result;
+    });
+  }
+
+  /** Compatibilidade com a API anterior: texto (transcrito ou digitado) -> resposta falada. */
   async processVoiceTranscription(transcription: string): Promise<void> {
+    await this.respond(transcription, 'voice');
+  }
+
+  /** Fala um texto. Se o TTS falhar, o texto continua visível no terminal. */
+  async speak(text: string): Promise<void> {
     try {
-      Logger.info('Processing voice transcription', { transcription });
-
-      const pendingMessage = this.stateMachine.getPendingMessage();
-      const currentState = this.stateMachine.getCurrentState();
-
-      // Reset from ERROR state if needed
-      if (currentState === 'ERROR') {
-        this.stateMachine.transition('IDLE');
-      }
-
-      if (currentState === 'WAITING_CONFIRMATION') {
-        const confirmed = this.responseService.parseConfirmation(transcription);
-        const result = await this.responseService.handleConfirmation(confirmed);
-
-        if (result.approved && result.response) {
-          const chatId = this.stateMachine.getTargetChatId();
-          if (chatId) {
-            this.stateMachine.transition('SENDING_MESSAGE');
-            await this.messageService.sendMessage(chatId, result.response);
-          }
-        }
-      } else if (pendingMessage) {
-        const intent = await this.responseService.processVoiceInput(
-          transcription,
-          pendingMessage
-        );
-
-        if (intent.intent === 'REPLY_TO_MESSAGE' && intent.response) {
-          this.stateMachine.setTargetChatId(pendingMessage.chatId);
-          await this.responseService.generateResponse(
-            intent.response,
-            pendingMessage
-          );
-          const pendingResponse = this.stateMachine.getPendingResponse();
-          if (pendingResponse) {
-            await this.responseService.requestConfirmation(
-              pendingResponse,
-              pendingMessage.senderName
-            );
-            await this.voiceService.speak(
-              `Vou responder ao ${pendingMessage.senderName}: ${pendingResponse}. Posso enviar?`
-            );
-          }
-        } else if (intent.intent === 'CANCEL') {
-          this.stateMachine.clearPendingData();
-          this.stateMachine.transition('IDLE');
-          await this.voiceService.speak('Cancelado.');
-        } else if (intent.intent === 'HELP') {
-          await this.voiceService.speak(
-            'Diga "responde" seguido da sua resposta para responder a uma mensagem.'
-          );
-          this.stateMachine.transition('IDLE');
-        } else {
-          await this.voiceService.speak('Não entendi. Tente novamente.');
-          this.stateMachine.transition('IDLE');
-        }
-      } else {
-        await this.voiceService.speak('Não há mensagem pendente para responder.');
-        this.stateMachine.transition('IDLE');
-      }
+      await this.voiceService.speak(text);
     } catch (error) {
-      Logger.error('Error processing voice transcription', error);
-      await this.voiceService.speak('Ocorreu um erro. Tente novamente.');
-      this.stateMachine.transition('ERROR');
+      Logger.warn('TTS failed; response shown only in terminal', { error: String(error) });
+      await this.eventBus.emit('ERROR', {
+        code: 'TTS_UNAVAILABLE',
+        message: 'A síntese de voz está indisponível; a resposta foi apenas exibida.',
+      });
     }
   }
 
-  getStatus(): {
-    whatsapp: boolean;
-    ai: boolean;
-    stt: boolean;
-    tts: boolean;
-    state: string;
-  } {
+  stopSpeaking(): void {
+    this.voiceService.stopSpeaking();
+  }
+
+  // ---- Voz (push-to-talk) ------------------------------------------------
+
+  isVoiceEnabled(): boolean {
+    return Boolean(this.voicePipeline);
+  }
+
+  getVoiceState(): VoicePipelineState | 'DISABLED' {
+    return this.voicePipeline?.getState() ?? 'DISABLED';
+  }
+
+  onVoiceStateChange(
+    listener: (state: VoicePipelineState, previous: VoicePipelineState) => void
+  ): () => void {
+    return this.voicePipeline?.onStateChange(listener) ?? (() => undefined);
+  }
+
+  onVoiceTurn(listener: (result: VoiceTurnResult) => void): () => void {
+    return this.voicePipeline?.onTurnComplete(listener) ?? (() => undefined);
+  }
+
+  waitForVoice(): void {
+    this.voicePipeline?.waitForVoice();
+  }
+
+  /** Começa a gravar (push-to-talk). Retorna false se não foi possível. */
+  async startVoiceInput(): Promise<boolean> {
+    if (!this.voicePipeline) {
+      Logger.warn('Voice input is not configured (no audio recorder)');
+      return false;
+    }
+    return this.voicePipeline.startRecording();
+  }
+
+  /** Para de gravar e executa: STT -> comando -> resposta falada. */
+  async finishVoiceInput(): Promise<VoiceTurnResult> {
+    if (!this.voicePipeline) {
+      return {};
+    }
+    return this.voicePipeline.stopAndProcess();
+  }
+
+  /** Interrompe gravação/processamento/fala e volta para IDLE. */
+  async cancelVoiceInput(): Promise<void> {
+    await this.voicePipeline?.cancel();
+  }
+
+  // ---- Estado -------------------------------------------------------------
+
+  on(eventType: EventType, callback: (event: AssistantEvent) => void | Promise<void>): void {
+    this.eventBus.on(eventType, callback);
+  }
+
+  getStatus(): CelesteStatus {
     return {
       whatsapp: this.messagingAdapter.isConnected(),
       ai: this.aiProvider.isAvailable(),
       stt: this.sttProvider.isAvailable(),
       tts: this.ttsProvider.isAvailable(),
+      mic: this.audioRecorder?.isAvailable() ?? false,
       state: this.stateMachine.getCurrentState(),
+      voice: this.getVoiceState(),
     };
+  }
+
+  /** Verifica ativamente Ollama, Whisper, TTS e microfone. */
+  async checkServices(): Promise<CelesteStatus> {
+    await Promise.all([
+      this.aiProvider.checkAvailability?.(),
+      this.sttProvider.checkAvailability?.(),
+      this.ttsProvider.checkAvailability?.(),
+      this.audioRecorder?.checkAvailability?.(),
+    ]);
+    return this.getStatus();
+  }
+
+  /** Para o comando STATUS: reconsulta só a IA (rápido) e usa o último estado dos demais. */
+  private async refreshStatus(): Promise<CelesteStatus> {
+    await this.aiProvider.checkAvailability?.();
+    return this.getStatus();
+  }
+
+  // ---- Mensagens recebidas -------------------------------------------------
+
+  private async handleIncomingMessage(message: IncomingMessage): Promise<void> {
+    await this.exclusive(async () => {
+      await this.messageService.handleIncomingMessage(message);
+
+      if (this.voicePipeline?.isBusy()) {
+        // Não fala por cima do usuário nem da resposta atual.
+        this.deferredAnnouncements.push(message);
+      } else {
+        await this.announce(message);
+      }
+
+      if (this.stateMachine.getCurrentState() === 'ANNOUNCING_MESSAGE') {
+        this.stateMachine.transition('IDLE');
+      }
+    });
+  }
+
+  private async announce(message: IncomingMessage): Promise<void> {
+    this.messageService.markAsRead(message.id);
+    this.messageService.setFocusedMessage(message);
+    // Mesmo sem TTS o anúncio aparece no terminal (evento ASSISTANT_SPEECH).
+    await this.voiceService.announceMessage(message).catch((error) => {
+      Logger.warn('Could not speak announcement', { error: String(error) });
+    });
+    this.commandProcessor.rememberSpoken(describeMessage(message));
+  }
+
+  private flushDeferredAnnouncements(state: VoicePipelineState): void {
+    if ((state === 'IDLE' || state === 'WAITING_FOR_VOICE') && this.deferredAnnouncements.length) {
+      const pending = this.deferredAnnouncements;
+      this.deferredAnnouncements = [];
+      void this.exclusive(async () => {
+        for (const message of pending) {
+          await this.announce(message);
+        }
+      });
+    }
+  }
+
+  private exclusive<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(task, task);
+    this.queue = run.catch(() => undefined);
+    return run;
   }
 
   private setupEventListeners(): void {
